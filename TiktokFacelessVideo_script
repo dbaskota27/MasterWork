@@ -3,77 +3,117 @@ import openai
 import requests
 import json
 import pandas as pd
+import random
+import time
+import asyncio
+import edge_tts
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
-try:
-    import pyttsx3
-except ImportError:
-    pyttsx3 = None
 from gtts import gTTS
-from moviepy.editor import concatenate_videoclips, AudioFileClip, VideoFileClip, vfx, TextClip, CompositeVideoClip
-from moviepy.video.compositing.transitions import crossfadein
+from moviepy.editor import concatenate_videoclips, AudioFileClip, VideoFileClip
+from moviepy.video.fx import all as vfx
 from moviepy.config import change_settings
 
 # === CONFIGURATION ===
 IMAGEMAGICK_BINARY = r"C:\\Program Files\\ImageMagick-7.1.1-Q16-HDRI\\magick.exe"
 change_settings({"IMAGEMAGICK_BINARY": IMAGEMAGICK_BINARY})
 
-openai.api_key = api_key  # Replace with your key
-PEXELS_API_KEY = PEXELS_API_KEY  # Replace with your key
-OUTPUT_DIR = "outputs"
+    # Replace
+TARGET_NICHE = "Dog habits"
+OUTPUT_DIR = os.path.join("outputs", TARGET_NICHE)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 video_summaries = []
 audio_lock = Lock()
 
-def generate_ideas_via_prompt():
-    prompt = """
-Generate 3 faceless short-form video ideas for Instagram Reels in different kind of wellness niche.
+EDGE_TTS_VOICES = [
+    "en-US-GuyNeural",
+    "en-US-JennyNeural",
+    "en-GB-RyanNeural",
+    "en-GB-SoniaNeural",
+    "en-AU-NatashaNeural",
+]
 
-Each idea should be a JSON object with:
-- ID: integer
-- Topic: short title (max 10 words)
-- Scene Prompts: Array of 3–5 vivid, specific visual descriptions
-- Text Prompt: A 200 word narration following storytelling arc
-- Duration (s): Estimated time (60s)
-- Title: Scroll-stopping caption (max 15 words)
-- Tags: Array of 5–7 hashtags
-Return a clean JSON array of 3 ideas.
-"""
-    print("💬 Requesting video ideas from ChatGPT...")
+TARGET_SCENE_DURATION = 15  # seconds
+
+# === HEALTH CHECK ===
+def health_check():
+    print("🔎 Checking environment...")
+    errors = []
+    if not openai.api_key:
+        errors.append("❌ OpenAI API key missing.")
+    if not PEXELS_API_KEY:
+        errors.append("❌ Pexels API key missing.")
+    if not os.path.exists(IMAGEMAGICK_BINARY):
+        errors.append("❌ ImageMagick binary not found.")
+    if errors:
+        for e in errors:
+            print(e)
+        raise EnvironmentError("Environment check failed.")
+    print("✅ Environment looks good.")
+
+# === AUDIO GENERATION ===
+async def generate_audio_async(text, filename, voice_choice):
+    communicate = edge_tts.Communicate(text, voice=voice_choice, rate="+0%")
+    await communicate.save(filename)
+
+def generate_audio_block(text, filename):
     try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7
-        )
-        content = response.choices[0].message.content.strip()
-        ideas = json.loads(content)
-        df = pd.DataFrame(ideas)
-        df.to_excel(os.path.join(OUTPUT_DIR, "video_ideas.xlsx"), index=False)
-        print("✅ Saved to video_ideas.xlsx")
-        return df
-    except Exception as e:
-        print(f"❌ Error in OpenAI request: {e}")
-        raise
+        if not isinstance(text, str) or not text.strip():
+            text = "Welcome."
+        voice_choice = random.choice(EDGE_TTS_VOICES)
+        asyncio.run(generate_audio_async(text, filename, voice_choice))
+        print(f"✅ Audio saved: {filename}")
+        return filename
+    except Exception:
+        print(f"⚠️ Edge-TTS failed, using gTTS fallback...")
+        try:
+            tts = gTTS(text=text, lang='en', tld='com')
+            tts.save(filename)
+            print(f"✅ Audio saved (gTTS fallback): {filename}")
+            return filename
+        except Exception as e:
+            print(f"❌ gTTS fallback failed: {e}")
+            return None
 
-def download_stock_videos_for_scenes(scene_prompts, base_name, max_results=1):
+# === IDEA GENERATION ===
+def generate_ideas_via_prompt():
+    prompt = f"""
+Generate 1 Instagram Reels ideas for the {TARGET_NICHE} niche.
+
+Each idea must include:
+- ID: integer
+- Topic: catchy title
+- Scene Prompts: 5 vivid, realistic visual descriptions (1 per scene)
+- Text Prompt: 5 separate narrations (~50 words each) matching each scene
+- Duration (s): ~75
+- Title: scroll-stopping caption
+- Tags: 5–7 trending hashtags
+
+Return as a clean JSON array of 5 ideas.
+"""
+    print("💬 Generating ideas...")
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7
+    )
+    ideas = json.loads(response.choices[0].message.content.strip())
+    df = pd.DataFrame(ideas)
+    df.to_excel(os.path.join(OUTPUT_DIR, "video_ideas.xlsx"), index=False)
+    print("✅ Ideas saved.")
+    return df
+
+# === DOWNLOAD STOCK VIDEOS ===
+def download_stock_videos_for_scenes(scene_prompts, base_name):
     headers = {"Authorization": PEXELS_API_KEY}
     video_paths = []
     fallback_queries = ["nature", "city", "abstract"]
 
     for i, prompt in enumerate(scene_prompts):
         query = prompt.split('.')[0].strip()
-        print(f"🎞 Searching Pexels for: {query}")
-        url = f"https://api.pexels.com/videos/search?query={query}&per_page={max_results}&orientation=portrait"
+        url = f"https://api.pexels.com/videos/search?query={query}&per_page=1&orientation=portrait"
         res = requests.get(url, headers=headers)
-
-        if res.status_code != 200:
-            print(f"⚠️ Pexels API error for '{query}': {res.status_code}")
-            query = fallback_queries[i % len(fallback_queries)]
-            url = f"https://api.pexels.com/videos/search?query={query}&per_page={max_results}&orientation=portrait"
-            res = requests.get(url, headers=headers)
-
         try:
             data = res.json()
             video_url = data["videos"][0]["video_files"][0]["link"]
@@ -81,143 +121,64 @@ def download_stock_videos_for_scenes(scene_prompts, base_name, max_results=1):
             video_path = os.path.join(f"{base_name}_scene_{i+1}.mp4")
             with open(video_path, "wb") as f:
                 f.write(video_data)
-            if os.path.getsize(video_path) > 0:
-                video_paths.append(video_path)
-                print(f"✅ Downloaded: {video_path}")
-            else:
-                raise ValueError("Downloaded file is empty")
+            video_paths.append(video_path)
+            print(f"✅ Downloaded: {video_path}")
         except Exception as e:
-            print(f"⚠️ Error downloading '{query}': {e}")
-
+            print(f"⚠️ Video download failed: {e}")
+            if video_paths:
+                video_paths.append(video_paths[-1])
     return video_paths
 
-def generate_audio(text, filename, target_duration):
-    print("🔊 Generating narration audio...")
-    if pyttsx3:
-        try:
-            engine = pyttsx3.init()
-            word_count = len(text.split())
-            adjusted_rate = int((word_count / target_duration) * 60)
-            engine.setProperty('rate', max(100, min(adjusted_rate, 200)))
-            engine.setProperty('volume', 1.0)
-            engine.save_to_file(text, filename)
-            engine.runAndWait()
-            print(f"✅ Audio saved: {filename}")
-            return filename
-        except Exception as e:
-            print(f"⚠️ pyttsx3 failed: {e}. Falling back to gTTS.")
+# === CREATE VIDEO FROM BLOCKS ===
+def create_video_from_blocks(video_paths, audio_paths, output_path):
+    print("🎬 Building final video...")
     try:
-        tts = gTTS(text=text, lang='en', tld='com', slow=False)
-        tts.save(filename)
-        print(f"✅ Audio saved: {filename}")
-        return filename
-    except Exception as e:
-        print(f"❌ Audio generation failed: {e}")
-        return None
-
-def create_video_from_clips_with_effects(video_paths, audio_path, output_path, text_prompt):
-    print("🎬 Stitching and adding effects to video clips...")
-    try:
-        with audio_lock:
-            audio_clip = AudioFileClip(audio_path) if audio_path and os.path.exists(audio_path) else None
-
         standard_size = (1080, 1920)
-        target_duration = 30
-
         video_clips = []
-        for clip_path in video_paths:
-            if not os.path.exists(clip_path):
-                continue
-            raw_clip = VideoFileClip(clip_path)
-            clip_duration = min(raw_clip.duration, target_duration / len(video_paths))
-            resized = raw_clip.resize(newsize=standard_size).set_duration(clip_duration)
-            zoomed = resized.fx(vfx.resize, lambda t: 1 + 0.05 * t / clip_duration).fx(
-                vfx.crop, width=standard_size[0], height=standard_size[1],
-                x_center=standard_size[0]/2, y_center=standard_size[1]/2
-            )
-            text_snippet = " ".join(text_prompt.split()[:10]) + "..."
-            try:
-                text_clip = TextClip(
-                    text_snippet, fontsize=70, color='white', font='Arial',
-                    stroke_color='black', stroke_width=2
-                ).set_position(('center', 'bottom')).set_duration(clip_duration).set_opacity(0.8)
-                final_clip = CompositeVideoClip([zoomed, text_clip])
-            except Exception:
-                final_clip = zoomed
+
+        for clip_path, audio_path in zip(video_paths, audio_paths):
+            video_clip = VideoFileClip(clip_path).resize(standard_size)
+            audio_clip = AudioFileClip(audio_path)
+            audio_duration = audio_clip.duration
+
+            if video_clip.duration < audio_duration:
+                slow_factor = video_clip.duration / audio_duration
+                slowed_video = video_clip.fx(vfx.speedx, factor=slow_factor)
+                final_clip = slowed_video.set_audio(audio_clip)
+            else:
+                final_clip = video_clip.subclip(0, audio_duration).set_audio(audio_clip)
+
             video_clips.append(final_clip)
 
-        if not video_clips:
-            return None
-
-        overlap = 0.5
-        transitioned_clips = []
-        cumulative_time = 0
-        for i, clip in enumerate(video_clips):
-            if i > 0:
-                clip = clip.fx(crossfadein, overlap)
-                cumulative_time -= overlap
-            clip = clip.set_start(cumulative_time)
-            cumulative_time += clip.duration
-            transitioned_clips.append(clip)
-
-        final_video = CompositeVideoClip(transitioned_clips, size=standard_size)
-        total_video_duration = final_video.duration
-
-        if audio_clip:
-            narration_duration = audio_clip.duration
-            if abs(narration_duration - total_video_duration) > 0.1:
-                audio_clip.close()
-                with audio_lock:
-                    try:
-                        os.remove(audio_path)
-                    except PermissionError:
-                        import time
-                        time.sleep(1)
-                        os.remove(audio_path)
-                    generate_audio(text_prompt, audio_path, total_video_duration)
-                    audio_clip = AudioFileClip(audio_path)
-
-            with audio_lock:
-                audio_clip = audio_clip.audio_fadein(0.5).audio_fadeout(0.5)
-                final_video = final_video.set_audio(audio_clip)
-
-        temp_audiofile = os.path.join(OUTPUT_DIR, f"temp_{os.path.basename(output_path)}_snd.mp4")
-        final_video.write_videofile(
-            output_path, fps=24, codec='libx264', audio_codec='aac', temp_audiofile=temp_audiofile
-        )
+        final_video = concatenate_videoclips(video_clips, method="compose")
+        final_video.write_videofile(output_path, fps=24, codec='libx264', audio_codec='aac')
 
         final_video.close()
-        if audio_clip:
-            audio_clip.close()
         for clip in video_clips:
             clip.close()
-
-        for clip_path in video_paths:
-            try:
-                if os.path.exists(clip_path):
-                    os.remove(clip_path)
-                    print(f"🧹 Deleted temp clip: {clip_path}")
-            except Exception as e:
-                print(f"⚠️ Could not delete {clip_path}: {e}")
-
+        print(f"✅ Final video: {output_path}")
         return output_path
     except Exception as e:
         print(f"❌ Video creation failed: {e}")
         return None
 
+# === PROCESS SINGLE VIDEO ===
 def process_single_video(row):
     try:
         id = int(row["ID"])
-        text_prompt = row["Text Prompt"]
-        title = row.get("Title", f"video_{id}")
         base = os.path.join(OUTPUT_DIR, f"video_{id}")
-        audio_path = f"{base}_audio.mp3"
-        video_path = f"{base}.mp4"
+        audio_folder = os.path.join(OUTPUT_DIR, f"audio_blocks_{id}")
+        os.makedirs(audio_folder, exist_ok=True)
 
-        print(f"\n📽️ Processing: {title} (ID {id})")
+        narration_blocks = row["Text Prompt"]
+        if isinstance(narration_blocks, str):
+            narration_blocks = json.loads(narration_blocks)
 
-        with audio_lock:
-            generate_audio(text_prompt, audio_path, 30)
+        audio_paths = []
+        for idx, block in enumerate(narration_blocks):
+            audio_path = os.path.join(audio_folder, f"block_{idx+1}.mp3")
+            generate_audio_block(block, audio_path)
+            audio_paths.append(audio_path)
 
         scene_prompts = row["Scene Prompts"]
         if isinstance(scene_prompts, str):
@@ -225,55 +186,27 @@ def process_single_video(row):
 
         video_segments = download_stock_videos_for_scenes(scene_prompts, base)
         if video_segments:
-            created_path = create_video_from_clips_with_effects(video_segments, audio_path, video_path, text_prompt)
-            if created_path:
-                print(f"✅ Created video: {created_path}")
-                try:
-                    clip = VideoFileClip(created_path)
-                    duration = clip.duration
-                    clip.close()
+            output_path = f"{base}.mp4"
+            create_video_from_blocks(video_segments, audio_paths, output_path)
 
-                    video_summaries.append({
-                        "ID": id,
-                        "Title": title,
-                        "Final Video Path": created_path,
-                        "Duration (seconds)": round(duration, 2),
-                        "Tags": row.get("Tags", "[]")
-                    })
-                except Exception as e:
-                    print(f"⚠️ Could not fetch duration for {created_path}: {e}")
-        else:
-            print(f"⚠️ Skipped ID {id}: No usable clips found")
     except Exception as e:
         print(f"❌ Error processing ID {row.get('ID')}: {e}")
 
-def process_excel_with_effects(df, max_workers=4):
-    print(f"🚀 Starting parallel processing with {max_workers} workers...")
+# === PARALLEL PROCESS ALL VIDEOS ===
+def process_excel_with_effects(df, max_workers=3):
+    print(f"🚀 Processing videos...")
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(process_single_video, row) for _, row in df.iterrows()]
         for future in as_completed(futures):
-            try:
-                future.result()
-            except Exception as e:
-                print(f"❌ Error in thread: {e}")
+            future.result()
 
-    if video_summaries:
-        summary_df = pd.DataFrame(video_summaries)
-        summary_path = os.path.join(OUTPUT_DIR, "video_summary.xlsx")
-        summary_df.to_excel(summary_path, index=False)
-        print(f"📋 Summary saved: {summary_path}")
-
+# === MAIN FUNCTION ===
 def main():
-    if not openai.api_key or not PEXELS_API_KEY:
-        print("❌ Missing API keys.")
-        return
-    if not os.path.exists(IMAGEMAGICK_BINARY):
-        print(f"❌ ImageMagick not found.")
-        return
     try:
+        health_check()
         df = generate_ideas_via_prompt()
         process_excel_with_effects(df)
-        print("🎉 All videos created!")
+        print("🎉 All videos created successfully!")
     except Exception as e:
         print(f"❌ Main execution failed: {e}")
 
