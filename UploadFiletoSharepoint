@@ -1,0 +1,190 @@
+import requests
+import os
+from msal import ConfidentialClientApplication
+from datetime import datetime
+
+def ensure_folder_path(access_token, site_id, folder_path):
+    """
+    Create folder path in SharePoint if it doesn't exist.
+    
+    Args:
+        access_token (str): Microsoft Graph API access token
+        site_id (str): SharePoint site ID
+        folder_path (str): Desired folder path in SharePoint
+    """
+    folders = folder_path.split('/')
+    current_path = ''
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json'
+    }
+    for folder in folders:
+        current_path += f'/{folder}' if current_path else folder
+        check_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root:/{current_path}"
+        response = requests.get(check_url, headers=headers)
+        if response.status_code == 404:
+            create_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root/children"
+            payload = {
+                "name": folder,
+                "folder": {},
+                "@microsoft.graph.conflictBehavior": "rename"
+            }
+            if current_path != folder:
+                parent_folder = '/'.join(current_path.split('/')[:-1])
+                create_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root:/{parent_folder}:/children"
+            response = requests.post(create_url, headers=headers, json=payload)
+            if response.status_code not in [200, 201]:
+                raise Exception(f"Failed to create folder {folder}: {response.json()}")
+        elif response.status_code != 200:
+            raise Exception(f"Error checking folder {folder}: {response.json()}")
+
+def upload_file(access_token, site_id, file_path, sharepoint_folder_path, file_name):
+    """
+    Upload a file to SharePoint, handling large files with upload sessions.
+    
+    Args:
+        access_token (str): Microsoft Graph API access token
+        site_id (str): SharePoint site ID
+        file_path (str): Local path to the file
+        sharepoint_folder_path (str): SharePoint destination folder
+        file_name (str): Name of the file in SharePoint
+    """
+    if not os.path.exists(file_path):
+        raise Exception(f"File not found: {file_path}")
+    
+    file_size = os.path.getsize(file_path)
+    upload_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root:/{sharepoint_folder_path}/{file_name}:/content"
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/octet-stream'
+    }
+    
+    if file_size <= 4 * 1024 * 1024:  # 4MB
+        with open(file_path, 'rb') as f:
+            file_content = f.read()
+        response = requests.put(upload_url, headers=headers, data=file_content)
+    else:
+        session_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root:/{sharepoint_folder_path}/{file_name}:/createUploadSession"
+        response = requests.post(session_url, headers={'Authorization': f'Bearer {access_token}'})
+        if response.status_code != 200:
+            raise Exception(f"Failed to create upload session: {response.json()}")
+        upload_session = response.json()
+        upload_url = upload_session['uploadUrl']
+        
+        chunk_size = 5 * 1024 * 1024
+        with open(file_path, 'rb') as f:
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                headers = {
+                    'Content-Length': str(len(chunk)),
+                    'Content-Range': f"bytes {f.tell()-len(chunk)}-{f.tell()-1}/{file_size}"
+                }
+                response = requests.put(upload_url, headers=headers, data=chunk)
+                if response.status_code not in [200, 202]:
+                    raise Exception(f"Failed to upload chunk: {response.json()}")
+        response = requests.get(upload_url.split('?')[0], headers={'Authorization': f'Bearer {access_token}'})
+    
+    if str(response.status_code).startswith('2'):
+        print(f"Successfully uploaded file: {file_name}")
+    else:
+        print(f"Upload failed. Status code: {response.status_code}")
+        print("Response:", response.json())
+
+def write_to_s3(project_code, report_name, attachments, sp_site, SubFolder_Name, use_original_filename=True):
+    """
+    Upload files from attachments list to SharePoint.
+    
+    Args:
+        project_code (str): 3-letter project code
+        report_name (str): Name of the report
+        attachments (list): List of file paths to upload
+        sp_site (str): SharePoint site name (or None for default)
+        SubFolder_Name (str): Subfolder name in SharePoint (or None)
+        use_original_filename (bool): Whether to use original file names
+    """
+    # Input validation
+    project_code = project_code.upper()
+    if len(project_code) != 3:
+        raise Exception('project_code should be a 3 letter acronym. Received: %s' % project_code)
+
+    # Azure AD / MSAL Setup
+    tenant_id = os.getenv('TENANT_ID')  # Replace with your tenant ID
+    client_id = os.getenv('CLIENT_ID')  # Replace with your client ID
+    client_secret = os.getenv('CLIENT_SECRET')  # Replace with your client secret
+    
+    app = ConfidentialClientApplication(
+        client_id,
+        authority=f"https://login.microsoftonline.com/{tenant_id}",
+        client_credential=client_secret
+    )
+    
+    result = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
+    
+    if 'access_token' not in result:
+        raise Exception(f"Could not obtain an access token: {result.get('error_description')}")
+    
+    access_token = result['access_token']
+
+    # Get the Site ID from Graph
+    if sp_site is None:
+        site_url = "https://graph.microsoft.com/v1.0/sites/YOUR_TENANT.sharepoint.com:/sites/YOUR_DEFAULT_SITE:"
+    else:
+        site_url = f"https://graph.microsoft.com/v1.0/sites/YOUR_TENANT.sharepoint.com:/sites/{sp_site}:"
+        
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json'
+    }
+    
+    response = requests.get(site_url, headers=headers)
+    if response.status_code != 200:
+        raise Exception(f"Error: {response.status_code} - {response.json()}")
+    
+    site_info = response.json()
+    site_id = site_info['id']
+    
+    print(f"Site ID: {site_id}")
+
+    # Construct folder path
+    if SubFolder_Name is not None:
+        sharepoint_folder_path = f'AutoReports/{project_code}/{SubFolder_Name}'
+    else:
+        sharepoint_folder_path = f'AutoReports/{project_code}'
+    
+    # Ensure folder exists
+    ensure_folder_path(access_token, site_id, sharepoint_folder_path)
+
+    # Upload each file in attachments
+    for attachment in attachments:
+        file_path = os.path.join(os.getcwd(), attachment)
+        file_name = attachment if use_original_filename else (
+            datetime.now().strftime("%Y%m%d") + "-" + 
+            report_name.replace(' ', '-').lower() + 
+            os.path.splitext(attachment)[1]
+        )
+        print(f"Local file path: {file_path}")
+        print(f"SharePoint file name: {file_name}")
+        
+        upload_file(access_token, site_id, file_path, sharepoint_folder_path, file_name)
+
+    # Clean up token file (if needed)
+    try:
+        token_file = 'o365_token.txt'
+        if os.path.exists(token_file):
+            os.remove(token_file)
+            print(f"Removed: {token_file}")
+        else:
+            print(f"File not found: {token_file}")
+    except:
+        pass
+
+if __name__ == "__main__":
+    # Example usage
+    project_code = "ABC"
+    report_name = "Sample Report"
+    attachments = ["sample.pdf"]
+    sp_site = None
+    SubFolder_Name = "Reports"
+    write_to_s3(project_code, report_name, attachments, sp_site, SubFolder_Name)
