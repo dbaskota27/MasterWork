@@ -8,8 +8,8 @@ import glob
 import yfinance as yf
 from datetime import datetime
 
-st.set_page_config(page_title="Crypto Paddler Dashboard", layout="wide", page_icon="📈")
-st.title("Crypto Paddler Trading Dashboard – @paddleurway")
+st.set_page_config(page_title="Khata Dashboard", layout="wide", page_icon="📈")
+st.title("Khata Trading Dashboard- Chakra Mystic Capital")
 st.markdown("Auto-loads **all .csv files** from the current folder, fixes parentheses in Amount, sorts by date, matches BTO (negative) with STC (positive) with tighter contract grouping. Buys before sells on same day.")
 
 # ── Load ALL CSVs ────────────────────────────────────────────────────────────
@@ -105,7 +105,7 @@ date_min = df['Process Date'].min().date() if pd.notna(df['Process Date'].min())
 date_max = df['Process Date'].max().date() if pd.notna(df['Process Date'].max()) else None
 start_date = st.sidebar.date_input("Start Date", value=date_min)
 end_date = st.sidebar.date_input("End Date", value=date_max)
-include_unmatched = st.sidebar.checkbox("Include unmatched sells in P/L?", value=True)
+include_unmatched = st.sidebar.checkbox("Include unmatched sells in P/L?", value=False)
 
 filtered_df = df[
     (df['Instrument'].isin(selected_instr)) &
@@ -311,8 +311,9 @@ with tab1:
     cols[4].metric("Expectancy", f"${metrics.get('Expectancy', 0):,.2f}")
 
     if not trades_df.empty:
-        # Stacked column chart for equity curve (P/L per ticker per date)
-        pl_per_date_ticker = trades_df.groupby(['Exit Date', 'Instrument'])['PL'].sum().reset_index()
+        # Stacked column chart for equity curve (P/L per ticker per day, excluding unmatched sells)
+        trades_df_filtered = trades_df[trades_df['Match Type'] != 'Unmatched Sell']
+        pl_per_date_ticker = trades_df_filtered.groupby(['Exit Date', 'Instrument'])['PL'].sum().reset_index()
         fig_stack = px.bar(pl_per_date_ticker, x='Exit Date', y='PL', color='Instrument', title="Stacked P/L by Ticker and Date")
         st.plotly_chart(fig_stack, use_container_width=True)
 
@@ -320,32 +321,17 @@ with tab1:
         st.subheader("Open Positions")
         st.dataframe(open_df.style.format({"Avg Entry Price": "${:,.2f}", "Quantity Open": "{:.0f}", "Current Price": "${:,.2f}", "Unrealized P/L": "${:,.2f}"}))
 
-with tab2:
-    st.header("Detailed Metrics")
-    if 'Status' in metrics:
-        st.warning(metrics['Status'])
-    else:
-        metrics_display = metrics.copy()
-        metrics_display['Total P/L'] = f"${metrics['Total P/L']:,.2f}"
-        metrics_display['Avg Win'] = f"${metrics['Avg Win']:,.2f}"
-        metrics_display['Avg Loss'] = f"${metrics['Avg Loss']:,.2f}"
-        metrics_display['Risk-Reward Ratio'] = f"{metrics['Risk-Reward Ratio']:.2f}" if np.isfinite(metrics['Risk-Reward Ratio']) else "∞"
-        metrics_display['Max Drawdown'] = f"${metrics['Max Drawdown']:,.2f}"
-        metrics_display['Expectancy'] = f"${metrics['Expectancy']:,.2f}"
-        metrics_display['Win Rate %'] = f"{metrics['Win Rate %']:.1f}%"
-        metrics_display['Profit Factor'] = f"{metrics['Profit Factor']:.2f}x" if np.isfinite(metrics['Profit Factor']) else "∞"
-        metrics_display['Closed Trades'] = int(metrics['Closed Trades'])
-        st.table(pd.DataFrame(list(metrics_display.items()), columns=["Metric", "Value"]))
-
 with tab3:
     st.header("Charts")
     if filtered_df.empty:
         st.warning("No data")
     else:
         pl_by_ticker = filtered_df.groupby('Instrument')['Amount'].sum().reset_index()
-        pl_by_ticker['Color'] = np.where(pl_by_ticker['Amount'] > 0, 'Profit', 'Loss')
+        open_instruments = open_df['Instrument'].unique() if not open_df.empty else []
+        pl_by_ticker['Color'] = pl_by_ticker['Instrument'].apply(lambda x: 'Open' if x in open_instruments else ('Profit' if pl_by_ticker.loc[pl_by_ticker['Instrument'] == x, 'Amount'].values[0] > 0 else 'Loss'))
+        color_map = {'Open': 'blue', 'Profit': 'green', 'Loss': 'red'}
         fig_bar = px.bar(pl_by_ticker, x='Instrument', y='Amount', title="Raw P/L by Instrument",
-                         color='Color', color_discrete_map={'Profit': 'green', 'Loss': 'red'})
+                         color='Color', color_discrete_map=color_map)
         st.plotly_chart(fig_bar, use_container_width=True)
         
         if not trades_df.empty:
@@ -414,4 +400,4 @@ else:
     st.sidebar.write("No trades to compute metrics.")
 
 st.markdown("---")
-st.caption("Updated: Adjusted % return for winners/losers at contract level (aggregated splits) + based on buy/sell prices")
+st.caption("Updated: Stacked chart excludes unmatched sells always + shows profits above/losses below")
