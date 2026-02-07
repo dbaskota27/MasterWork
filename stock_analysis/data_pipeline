@@ -1,0 +1,71 @@
+from __future__ import annotations
+import pandas as pd
+import numpy as np
+import re
+
+REQUIRED = ["Process Date", "Instrument", "Description", "trans_code", "Quantity", "Price", "Amount"]
+
+def clean_amount(val):
+    s = str(val).strip()
+    if s.startswith('(') and s.endswith(')'):
+        s = '-' + s[1:-1]
+    s = s.replace('$', '').replace(',', '')
+    try:
+        return float(s)
+    except Exception:
+        return np.nan
+
+def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.columns = df.columns.str.strip().str.lower().str.replace(' ', '_')
+
+    column_map = {
+        'process_date': 'Process Date',
+        'trade_date': 'Process Date',
+        'instrument': 'Instrument',
+        'description': 'Description',
+        'trans_code': 'trans_code',
+        'quantity': 'Quantity',
+        'price': 'Price',
+        'amount': 'Amount'
+    }
+    df = df.rename(columns=column_map)
+
+    for col in REQUIRED:
+        if col not in df.columns:
+            df[col] = np.nan
+
+    df['Process Date'] = pd.to_datetime(df['Process Date'], errors='coerce')
+    df['Amount'] = df['Amount'].apply(clean_amount)
+    df['Quantity'] = pd.to_numeric(df['Quantity'], errors='coerce').abs()
+    df['Price'] = pd.to_numeric(df['Price'], errors='coerce')
+
+    mask_exp = df['trans_code'].astype(str).str.upper().str.contains('OEXP|EXP', na=False) | \
+               df['Description'].astype(str).str.lower().str.contains('expiration', na=False)
+
+    df.loc[mask_exp & df['Amount'].isna(), 'Amount'] = 0.0
+    df.loc[mask_exp & df['Price'].isna(), 'Price'] = 0.0
+
+    df['Price'] = df['Price'].fillna(abs(df['Amount']) / (df['Quantity'] * 100 + 1e-6))
+    df = df.sort_values('Process Date').reset_index(drop=True)
+
+    return df
+
+def _parse_option_details(desc):
+    if pd.isna(desc):
+        return 'Unknown', None, None
+    s = str(desc).lower()
+    opt_type = 'Put' if 'put' in s else 'Call' if 'call' in s else 'Other'
+    exp = re.search(r'(\d{1,2}/\d{1,2}/\d{4})', s)
+    exp = exp.group(1) if exp else None
+    strike = re.search(r'\$(\d+\.?\d*)', s)
+    strike = float(strike.group(1)) if strike else None
+    return opt_type, exp, strike
+
+def add_option_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    parsed = df['Description'].apply(_parse_option_details)
+    df['Option Type'] = [p[0] for p in parsed]
+    df['Expiration'] = [p[1] for p in parsed]
+    df['Strike'] = [p[2] for p in parsed]
+    return df

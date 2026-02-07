@@ -1,16 +1,285 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import numpy as np
 import re
 import os
 import glob
 import yfinance as yf
-from datetime import datetime
+from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Khata Dashboard", layout="wide", page_icon="📈")
-st.title("Khata Trading Dashboard- Chakra Mystic Capital")
-st.markdown("Auto-loads **all .csv files** from the current folder, fixes parentheses in Amount, sorts by date, matches BTO (negative) with STC (positive) with tighter contract grouping. Buys before sells on same day.")
+st.title("Khata Trading Dashboard - Chakra Mystic Capital")
+st.markdown("""
+Auto-loads **all .csv files** from the current folder, fixes parentheses in Amount, sorts by date,  
+matches BTO (negative) with STC (positive) using **full history** for accurate P/L even when date range is limited.  
+Buys before sells on same day • Accurate realized P/L for selected period & tickers
+""")
+
+# ── Trade Matching Function ──────────────────────────────────────────────────
+def match_trades(df):
+    df = df.dropna(subset=['Quantity', 'Instrument', 'Process Date']).copy()
+    trades = []
+    open_positions = []
+    group_keys = ['Instrument', 'Option Type', 'Expiration', 'Strike']
+    
+    for keys, group in df.groupby(group_keys, dropna=False):
+        group = group.sort_values(by=['Process Date', 'Amount'], ascending=[True, True])
+        long_entry_queue = []
+        short_entry_queue = []
+        
+        for _, row in group.iterrows():
+            qty = row['Quantity']
+            price = row.get('Price', 0.0)
+            date = row['Process Date']
+            amount = row.get('Amount', 0.0)
+            trans_code = str(row.get('trans_code', '')).upper()
+            desc = str(row.get('Description', '')).lower()
+            is_exp = 'OEXP' in trans_code or 'EXP' in trans_code or 'expiration' in desc
+            
+            if is_exp:
+                price = 0.0
+                qty_to_match = qty
+                i = 0
+                while qty_to_match > 0 and i < len(long_entry_queue):
+                    entry = long_entry_queue[i]
+                    match_qty = min(qty_to_match, entry['qty'])
+                    pl = (price - entry['price']) * match_qty * 100
+                    trades.append({**dict(zip(group_keys, keys)),
+                                   'Position Type': 'Long',
+                                   'Entry Date': entry['date'],
+                                   'Entry Price': entry['price'],
+                                   'Exit Date': date,
+                                   'Exit Price': price,
+                                   'Quantity Closed': match_qty,
+                                   'PL': pl,
+                                   'Holding Hours': (date - entry['date']).total_seconds() / 3600,
+                                   'Match Type': 'Expired'})
+                    entry['qty'] -= match_qty
+                    qty_to_match -= match_qty
+                    if entry['qty'] <= 0:
+                        long_entry_queue.pop(i)
+                    else:
+                        i += 1
+                i = 0
+                while qty_to_match > 0 and i < len(short_entry_queue):
+                    entry = short_entry_queue[i]
+                    match_qty = min(qty_to_match, entry['qty'])
+                    pl = (entry['price'] - price) * match_qty * 100
+                    trades.append({**dict(zip(group_keys, keys)),
+                                   'Position Type': 'Short',
+                                   'Entry Date': entry['date'],
+                                   'Entry Price': entry['price'],
+                                   'Exit Date': date,
+                                   'Exit Price': price,
+                                   'Quantity Closed': match_qty,
+                                   'PL': pl,
+                                   'Holding Hours': (date - entry['date']).total_seconds() / 3600,
+                                   'Match Type': 'Expired'})
+                    entry['qty'] -= match_qty
+                    qty_to_match -= match_qty
+                    if entry['qty'] <= 0:
+                        short_entry_queue.pop(i)
+                    else:
+                        i += 1
+                if qty_to_match > 0:
+                    st.sidebar.warning(f"Unmatched expiration qty for {keys}: {qty_to_match}")
+                continue
+            
+            if 'BTO' in trans_code or (amount < 0 and 'STO' not in trans_code and 'BTC' not in trans_code):
+                long_entry_queue.append({'qty': qty, 'price': price, 'date': date})
+            elif 'STC' in trans_code or (amount > 0 and 'STO' not in trans_code and 'BTC' not in trans_code):
+                qty_to_match = qty
+                i = 0
+                while qty_to_match > 0 and i < len(long_entry_queue):
+                    entry = long_entry_queue[i]
+                    match_qty = min(qty_to_match, entry['qty'])
+                    pl = (price - entry['price']) * match_qty * 100
+                    trades.append({**dict(zip(group_keys, keys)),
+                                   'Position Type': 'Long',
+                                   'Entry Date': entry['date'],
+                                   'Entry Price': entry['price'],
+                                   'Exit Date': date,
+                                   'Exit Price': price,
+                                   'Quantity Closed': match_qty,
+                                   'PL': pl,
+                                   'Holding Hours': (date - entry['date']).total_seconds() / 3600,
+                                   'Match Type': 'Matched'})
+                    entry['qty'] -= match_qty
+                    qty_to_match -= match_qty
+                    if entry['qty'] <= 0:
+                        long_entry_queue.pop(i)
+                    else:
+                        i += 1
+                if qty_to_match > 0:
+                    trades.append({**dict(zip(group_keys, keys)),
+                                   'Position Type': 'Long',
+                                   'Entry Date': None,
+                                   'Entry Price': None,
+                                   'Exit Date': date,
+                                   'Exit Price': price,
+                                   'Quantity Closed': qty_to_match,
+                                   'PL': qty_to_match * price * 100,
+                                   'Holding Hours': None,
+                                   'Match Type': 'Unmatched Close'})
+            elif 'STO' in trans_code:
+                short_entry_queue.append({'qty': qty, 'price': price, 'date': date})
+            elif 'BTC' in trans_code:
+                qty_to_match = qty
+                i = 0
+                while qty_to_match > 0 and i < len(short_entry_queue):
+                    entry = short_entry_queue[i]
+                    match_qty = min(qty_to_match, entry['qty'])
+                    pl = (entry['price'] - price) * match_qty * 100
+                    trades.append({**dict(zip(group_keys, keys)),
+                                   'Position Type': 'Short',
+                                   'Entry Date': entry['date'],
+                                   'Entry Price': entry['price'],
+                                   'Exit Date': date,
+                                   'Exit Price': price,
+                                   'Quantity Closed': match_qty,
+                                   'PL': pl,
+                                   'Holding Hours': (date - entry['date']).total_seconds() / 3600,
+                                   'Match Type': 'Matched'})
+                    entry['qty'] -= match_qty
+                    qty_to_match -= match_qty
+                    if entry['qty'] <= 0:
+                        short_entry_queue.pop(i)
+                    else:
+                        i += 1
+                if qty_to_match > 0:
+                    trades.append({**dict(zip(group_keys, keys)),
+                                   'Position Type': 'Short',
+                                   'Entry Date': None,
+                                   'Entry Price': None,
+                                   'Exit Date': date,
+                                   'Exit Price': price,
+                                   'Quantity Closed': qty_to_match,
+                                   'PL': -qty_to_match * price * 100,
+                                   'Holding Hours': None,
+                                   'Match Type': 'Unmatched Close'})
+        
+        for entry in long_entry_queue:
+            open_positions.append({**dict(zip(group_keys, keys)),
+                                   'Position Type': 'Long',
+                                   'Entry Date': entry['date'],
+                                   'Quantity Open': entry['qty'],
+                                   'Avg Entry Price': entry['price']})
+        for entry in short_entry_queue:
+            open_positions.append({**dict(zip(group_keys, keys)),
+                                   'Position Type': 'Short',
+                                   'Entry Date': entry['date'],
+                                   'Quantity Open': entry['qty'],
+                                   'Avg Entry Price': entry['price']})
+    
+    trades_df = pd.DataFrame(trades)
+    open_df = pd.DataFrame(open_positions)
+    return trades_df, open_df
+
+# ── Metrics Function ─────────────────────────────────────────────────────────
+def calculate_trade_metrics(trades_df):
+    if trades_df.empty:
+        return {'Status': 'No closed trades'}
+    
+    total_pl = trades_df['PL'].sum()
+    trades = len(trades_df)
+    wins = trades_df[trades_df['PL'] > 0]
+    losses = trades_df[trades_df['PL'] < 0]
+    win_rate = len(wins) / trades * 100 if trades > 0 else 0
+    avg_win = wins['PL'].mean() if len(wins) > 0 else 0
+    avg_loss = losses['PL'].mean() if len(losses) > 0 else 0
+    risk_reward = abs(avg_win / avg_loss) if avg_loss != 0 else np.inf
+    profit_factor = abs(wins['PL'].sum() / losses['PL'].sum()) if len(losses) > 0 and losses['PL'].sum() != 0 else np.inf
+    cum_pl = trades_df['PL'].cumsum()
+    max_dd = (cum_pl - cum_pl.cummax()).min() if not cum_pl.empty else 0
+    expectancy = (win_rate/100 * avg_win) + ((1 - win_rate/100) * avg_loss)
+    
+    return {
+        'Total P/L': total_pl, 'Closed Trades': trades, 'Win Rate %': win_rate,
+        'Avg Win': avg_win, 'Avg Loss': avg_loss, 'Risk-Reward Ratio': risk_reward,
+        'Profit Factor': profit_factor, 'Max Drawdown': max_dd, 'Expectancy': expectancy,
+        'Profitable Trades': len(wins), 'Losing Trades': len(losses)
+    }
+
+# ── Live Price Functions ─────────────────────────────────────────────────────
+def fetch_current_option_price(row):
+    if pd.isna(row['Instrument']) or pd.isna(row['Option Type']) or pd.isna(row['Expiration']) or pd.isna(row['Strike']):
+        return np.nan
+    try:
+        exp_date = datetime.strptime(row['Expiration'], '%m/%d/%Y').strftime('%Y-%m-%d')
+        ticker = yf.Ticker(row['Instrument'])
+        chain = ticker.option_chain(exp_date)
+        opts = chain.calls if row['Option Type'] == 'Call' else chain.puts
+        opt = opts[opts['strike'] == row['Strike']]
+        return opt['lastPrice'].values[0] if not opt.empty else np.nan
+    except:
+        return np.nan
+
+def fetch_current_stock_price(symbol):
+    try:
+        ticker = yf.Ticker(symbol)
+        hist = ticker.history(period="1d")
+        if not hist.empty:
+            return hist['Close'].iloc[-1]
+        else:
+            return np.nan
+    except:
+        return np.nan
+
+def calculate_unrealized(row):
+    current = row.get('Current Price', np.nan)
+    if np.isnan(current):
+        return 0.0
+    entry = row['Avg Entry Price']
+    qty = row['Quantity Open']
+    multiplier = 100
+    if row['Position Type'] == 'Short':
+        return (entry - current) * qty * multiplier
+    else:
+        return (current - entry) * qty * multiplier
+
+# ── Sell Order Stats for MTD ─────────────────────────────────────────────────
+def calculate_sell_order_stats_mtd(closed_trades):
+    if closed_trades.empty:
+        return pd.DataFrame()
+    
+    longs = closed_trades[closed_trades['Position Type'] == 'Long'].copy()
+    if longs.empty:
+        return pd.DataFrame()
+    
+    longs['Buy Key'] = (
+        longs['Entry Date'].astype(str) + '_' +
+        longs['Instrument'] + '_' +
+        longs['Expiration'].astype(str) + '_' +
+        longs['Strike'].astype(str) + '_' +
+        longs['Entry Price'].astype(str)
+    )
+    
+    stats = []
+    for buy_key, group in longs.groupby('Buy Key'):
+        sells = group.sort_values('Exit Date')
+        for order, (_, sell) in enumerate(sells.iterrows(), 1):
+            stats.append({
+                'Sell Order': order,
+                'Quantity Closed': sell['Quantity Closed'],
+                'PL': sell['PL']
+            })
+    
+    stats_df = pd.DataFrame(stats)
+    if stats_df.empty:
+        return pd.DataFrame()
+    
+    agg = stats_df.groupby('Sell Order').agg({
+        'Quantity Closed': 'mean',
+        'PL': 'mean',
+        'Sell Order': 'count'
+    }).rename(columns={'Sell Order': 'Count'}).round(2)
+    
+    agg = agg.reset_index()
+    agg.columns = ['Sell Order', 'Avg Quantity Sold', 'Avg Profit', 'Count']
+    
+    return agg
 
 # ── Load ALL CSVs ────────────────────────────────────────────────────────────
 @st.cache_data
@@ -20,6 +289,7 @@ def load_all_csvs():
     if not csv_files:
         st.error("No .csv files found in: " + folder)
         return pd.DataFrame()
+    
     st.sidebar.write(f"**Found {len(csv_files)} CSVs**")
     combined = []
     for f in csv_files:
@@ -28,8 +298,10 @@ def load_all_csvs():
             combined.append(temp)
         except Exception as e:
             st.sidebar.warning(f"Skipped {os.path.basename(f)}: {e}")
+    
     if not combined:
         return pd.DataFrame()
+    
     df = pd.concat(combined, ignore_index=True)
     st.sidebar.success(f"Combined {len(df)} rows")
     return df
@@ -39,16 +311,12 @@ if df.empty:
     st.stop()
 
 # ── Clean ────────────────────────────────────────────────────────────────────
-df.columns = df.columns.str.strip().str.lower().str.replace(' ', '_')  # Normalize
+df.columns = df.columns.str.strip().str.lower().str.replace(' ', '_')
 column_map = {
-    'process_date': 'Process Date',
-    'trade_date': 'Process Date',
-    'instrument': 'Instrument',
-    'description': 'Description',
-    'trans_code': 'trans_code',  # From your screenshot
-    'quantity': 'Quantity',
-    'price': 'Price',
-    'amount': 'Amount'
+    'process_date': 'Process Date', 'trade_date': 'Process Date',
+    'instrument': 'Instrument', 'description': 'Description',
+    'trans_code': 'trans_code', 'quantity': 'Quantity',
+    'price': 'Price', 'amount': 'Amount'
 }
 df = df.rename(columns=column_map)
 
@@ -65,22 +333,15 @@ def clean_amount(val):
         return np.nan
 
 df['Amount'] = df['Amount'].apply(clean_amount)
-
-# Strip non-numeric from Quantity (e.g., '7S' → 7.0)
-df['Quantity'] = pd.to_numeric(df['Quantity'].astype(str).str.replace(r'[^0-9.]', '', regex=True), errors='coerce').abs()
-
+df['Quantity'] = pd.to_numeric(df['Quantity'], errors='coerce').abs()
 df['Price'] = pd.to_numeric(df['Price'], errors='coerce')
 
-# Impute Amount=0 for OEXP/expiration rows if NaN (worthless)
 mask_exp = df['trans_code'].str.upper().str.contains('OEXP|EXP', na=False) | df['Description'].str.lower().str.contains('expiration', na=False)
 df.loc[mask_exp & df['Amount'].isna(), 'Amount'] = 0.0
-
-# Back-calculate or set Price=0 for expirations
 df.loc[mask_exp & df['Price'].isna(), 'Price'] = 0.0
-df['Price'] = df['Price'].fillna(abs(df['Amount']) / (df['Quantity'] * 100 + 1e-6))
 
+df['Price'] = df['Price'].fillna(abs(df['Amount']) / (df['Quantity'] * 100 + 1e-6))
 df = df.sort_values('Process Date').reset_index(drop=True)
-df['Cum PL'] = df['Amount'].cumsum()
 
 # ── Parse Option Details ─────────────────────────────────────────────────────
 def parse_option_details(desc):
@@ -88,8 +349,10 @@ def parse_option_details(desc):
         return 'Unknown', None, None
     desc = str(desc).lower()
     opt_type = 'Put' if 'put' in desc else 'Call' if 'call' in desc else 'Other'
-    exp = re.search(r'(\d{1,2}/\d{1,2}/\d{4})', desc).group(1) if re.search(r'(\d{1,2}/\d{1,2}/\d{4})', desc) else None
-    strike = float(re.search(r'\$(\d+\.?\d*)', desc).group(1)) if re.search(r'\$(\d+\.?\d*)', desc) else None
+    exp = re.search(r'(\d{1,2}/\d{1,2}/\d{4})', desc)
+    exp = exp.group(1) if exp else None
+    strike = re.search(r'\$(\d+\.?\d*)', desc)
+    strike = float(strike.group(1)) if strike else None
     return opt_type, exp, strike
 
 parsed = df['Description'].apply(parse_option_details)
@@ -99,305 +362,324 @@ df['Strike'] = [p[2] for p in parsed]
 
 # ── Sidebar Filters ──────────────────────────────────────────────────────────
 st.sidebar.header("Filters")
+
+# "Select All Tickers" checkbox
+select_all = st.sidebar.checkbox("Select All Tickers", value=True)
+
 instruments = sorted(df['Instrument'].dropna().unique())
-selected_instr = st.sidebar.multiselect("Instruments", instruments, default=instruments)
-date_min = df['Process Date'].min().date() if pd.notna(df['Process Date'].min()) else None
-date_max = df['Process Date'].max().date() if pd.notna(df['Process Date'].max()) else None
+
+if select_all:
+    selected_instr = instruments.copy()
+else:
+    selected_instr = st.sidebar.multiselect("Instruments", instruments, default=instruments[:5])  # default first 5
+
+date_min = df['Process Date'].min().date() if pd.notna(df['Process Date'].min()) else datetime.today().date()
+date_max = df['Process Date'].max().date() if pd.notna(df['Process Date'].max()) else datetime.today().date()
 start_date = st.sidebar.date_input("Start Date", value=date_min)
-end_date = st.sidebar.date_input("End Date", value=date_max)
+end_date   = st.sidebar.date_input("End Date", value=date_max)
+
 include_unmatched = st.sidebar.checkbox("Include unmatched sells in P/L?", value=False)
 
-filtered_df = df[
-    (df['Instrument'].isin(selected_instr)) &
-    (df['Process Date'].dt.date >= start_date) &
-    (df['Process Date'].dt.date <= end_date)
-].copy()
+# ── Prepare data ─────────────────────────────────────────────────────────────
+df_selected = df[df['Instrument'].isin(selected_instr)].copy()
+if df_selected.empty:
+    st.error("No data for selected instruments")
+    st.stop()
 
-# ── Trade Matching ───────────────────────────────────────────────────────────
-def match_trades(df):
-    df = df.dropna(subset=['Quantity', 'Instrument', 'Process Date']).copy()  # Relaxed dropna: allow Price/Amount NaN for expirations
-    trades = []
-    open_positions = []
+start_dt = pd.to_datetime(start_date)
+end_dt = pd.to_datetime(end_date)
 
-    group_keys = ['Instrument', 'Option Type', 'Expiration', 'Strike']
+df_for_matching = df_selected[df_selected['Process Date'] <= end_dt].copy()
+trades_all_up_to_end, open_at_end = match_trades(df_for_matching)
 
-    for keys, group in df.groupby(group_keys, dropna=False):
-        # Sort by date, then buys before sells (allow cross-day for expirations)
-        group = group.sort_values(by=['Process Date', 'Amount'], ascending=[True, True])
-        entry_queue = []  # open buys
+closed_trades = trades_all_up_to_end[trades_all_up_to_end['Exit Date'] >= start_dt].copy()
 
-        for _, row in group.iterrows():
-            qty = row['Quantity']
-            price = row.get('Price', 0.0)  # Default 0 if NaN
-            date = row['Process Date']
-            amount = row.get('Amount', 0.0)  # Default 0 if NaN
-            trans_code = str(row.get('trans_code', '')).upper()
-            desc = str(row.get('Description', '')).lower()
-
-            if 'oexp' in trans_code or 'exp' in trans_code or 'expiration' in desc:  # Handle expiration as close @0 (worthless)
-                # Force price=0 for expiration
-                price = 0
-                qty_to_match = qty
-                i = 0
-                while qty_to_match > 0 and i < len(entry_queue):
-                    entry = entry_queue[i]
-                    match_qty = min(entry['qty'], qty_to_match)
-                    pl = (price - entry['price']) * match_qty * 100  # Loss to zero for longs
-                    trades.append({
-                        'Instrument': row['Instrument'],
-                        'Option Type': row['Option Type'],
-                        'Expiration': row['Expiration'],
-                        'Strike': row['Strike'],
-                        'Entry Date': entry['date'],
-                        'Exit Date': date,
-                        'Quantity Closed': match_qty,
-                        'Entry Price': entry['price'],
-                        'Exit Price': price,
-                        'PL': pl,
-                        'Holding Hours': (date - entry['date']).total_seconds() / 3600,
-                        'Match Type': 'Expired'
-                    })
-                    entry['qty'] -= match_qty
-                    qty_to_match -= match_qty
-                    if entry['qty'] <= 0:
-                        entry_queue.pop(i)
-                    else:
-                        i += 1
-                if qty_to_match > 0:
-                    st.sidebar.warning(f"Unmatched expiration qty for {keys}: {qty_to_match}")
-                continue  # Skip the rest for expiration rows
-
-            if amount < 0:  # BTO / Buy
-                entry_queue.append({'qty': qty, 'price': price, 'date': date})
-            elif amount > 0:  # STC / Sell
-                qty_to_match = qty
-                i = 0
-                while qty_to_match > 0 and i < len(entry_queue):
-                    entry = entry_queue[i]
-                    match_qty = min(entry['qty'], qty_to_match)
-                    pl = (price - entry['price']) * match_qty * 100
-                    trades.append({
-                        'Instrument': row['Instrument'],
-                        'Option Type': row['Option Type'],
-                        'Expiration': row['Expiration'],
-                        'Strike': row['Strike'],
-                        'Entry Date': entry['date'],
-                        'Exit Date': date,
-                        'Quantity Closed': match_qty,
-                        'Entry Price': entry['price'],
-                        'Exit Price': price,
-                        'PL': pl,
-                        'Holding Hours': (date - entry['date']).total_seconds() / 3600,
-                        'Match Type': 'Matched'
-                    })
-                    entry['qty'] -= match_qty
-                    qty_to_match -= match_qty
-                    if entry['qty'] <= 0:
-                        entry_queue.pop(i)
-                    else:
-                        i += 1
-                if qty_to_match > 0:
-                    trades.append({
-                        'Instrument': row['Instrument'],
-                        'Option Type': row['Option Type'],
-                        'Expiration': row['Expiration'],
-                        'Strike': row['Strike'],
-                        'Entry Date': None,
-                        'Exit Date': date,
-                        'Quantity Closed': qty_to_match,
-                        'Entry Price': None,
-                        'Exit Price': price,
-                        'PL': amount,
-                        'Holding Hours': None,
-                        'Match Type': 'Unmatched Sell'
-                    })
-
-        # Remaining opens
-        for entry in entry_queue:
-            open_positions.append({
-                'Instrument': keys[0],
-                'Option Type': keys[1],
-                'Expiration': keys[2],
-                'Strike': keys[3],
-                'Entry Date': entry['date'],
-                'Quantity Open': entry['qty'],
-                'Avg Entry Price': entry['price']
-            })
-
-    trades_df = pd.DataFrame(trades)
-    open_df = pd.DataFrame(open_positions)
-    return trades_df, open_df
-
-trades_df, open_df = match_trades(filtered_df)
-st.sidebar.write(f"**Matched closed trades: {len(trades_df)}**")
-st.sidebar.write(f"**Open positions (unmatched buys): {len(open_df)}**")
-
-# Optional: Filter unmatched
 if not include_unmatched:
-    trades_df = trades_df[trades_df['Match Type'] != 'Unmatched Sell']
+    closed_trades = closed_trades[closed_trades['Match Type'] != 'Unmatched Close']
 
-# ── Metrics ──────────────────────────────────────────────────────────────────
-def calculate_trade_metrics(trades_df):
-    if trades_df.empty:
-        return {'Status': 'No closed trades matched – check dates, signs, or parsing'}
-    total_pl = trades_df['PL'].sum()
-    trades = len(trades_df)
-    wins = trades_df[trades_df['PL'] > 0]
-    losses = trades_df[trades_df['PL'] < 0]
-    win_rate = len(wins) / trades * 100 if trades > 0 else 0
-    avg_win = wins['PL'].mean() if len(wins) > 0 else 0
-    avg_loss = losses['PL'].mean() if len(losses) > 0 else 0
-    risk_reward_ratio = abs(avg_win / avg_loss) if avg_loss != 0 else np.inf
-    profit_factor = abs(wins['PL'].sum() / losses['PL'].sum()) if len(losses) > 0 and losses['PL'].sum() != 0 else np.inf
-    cum_pl = trades_df['PL'].cumsum()
-    max_dd = (cum_pl - cum_pl.cummax()).min() if not cum_pl.empty else 0
-    expectancy = (win_rate / 100 * avg_win) + ((1 - win_rate / 100) * avg_loss)
-    return {
-        'Total P/L': total_pl,
-        'Closed Trades': trades,
-        'Win Rate %': win_rate,
-        'Avg Win': avg_win,
-        'Avg Loss': avg_loss,
-        'Risk-Reward Ratio': risk_reward_ratio,
-        'Profit Factor': profit_factor,
-        'Max Drawdown': max_dd,
-        'Expectancy': expectancy
-    }
+period_transactions = df_selected[(df_selected['Process Date'] >= start_dt) & (df_selected['Process Date'] <= end_dt)].copy()
 
-metrics = calculate_trade_metrics(trades_df)
+period_metrics = calculate_trade_metrics(closed_trades)
 
-# ── Unrealized P/L Integration ───────────────────────────────────────────────
-def fetch_current_option_price(instrument, option_type, expiration, strike):
-    # Convert expiration to yfinance format YYYY-MM-DD
-    try:
-        exp_date = datetime.strptime(expiration, '%m/%d/%Y').strftime('%Y-%m-%d')
-        ticker = yf.Ticker(instrument)
-        chain = ticker.option_chain(exp_date)
-        if option_type == 'Call':
-            opts = chain.calls
-        else:
-            opts = chain.puts
-        opt = opts[opts['strike'] == strike]
-        if not opt.empty:
-            return opt['lastPrice'].values[0]  # Use lastPrice as estimate
-        else:
-            return np.nan
-    except Exception as e:
-        st.warning(f"Failed to fetch price for {instrument} {option_type} {exp_date} ${strike}: {e}")
-        return np.nan
+# ── Calculate aggregates ─────────────────────────────────────────────────────
+total_pl = closed_trades['PL'].sum() if not closed_trades.empty else 0.0
 
-if not open_df.empty:
-    if st.sidebar.button("Fetch Current Prices for Unrealized P/L"):
-        open_df['Current Price'] = open_df.apply(lambda row: fetch_current_option_price(row['Instrument'], row['Option Type'], row['Expiration'], row['Strike']), axis=1)
-        open_df['Unrealized P/L'] = (open_df['Current Price'] - open_df['Avg Entry Price']) * open_df['Quantity Open'] * 100
-        total_unrealized = open_df['Unrealized P/L'].sum()
-    else:
-        open_df['Current Price'] = np.nan
-        open_df['Unrealized P/L'] = np.nan
-        total_unrealized = 0.0
+# ── Options Summary ──────────────────────────────────────────────────────────
+group_keys = ['Instrument', 'Option Type', 'Expiration', 'Strike']
+
+summary = pd.DataFrame()
+
+if not closed_trades.empty:
+    summary = closed_trades.groupby(group_keys + ['Position Type']).agg({
+        'Quantity Closed': 'sum',
+        'PL': 'sum',
+        'Entry Price': lambda x: np.average(closed_trades.loc[x.index, 'Entry Price'], weights=closed_trades.loc[x.index, 'Quantity Closed']),
+        'Exit Price': lambda x: np.average(closed_trades.loc[x.index, 'Exit Price'], weights=closed_trades.loc[x.index, 'Quantity Closed'])
+    }).reset_index()
+
+    summary.rename(columns={'Quantity Closed': 'Closed Qty', 'Entry Price': 'Avg Entry Price', 'Exit Price': 'Avg Exit Price'}, inplace=True)
+
+if not open_at_end.empty:
+    open_summary = open_at_end.groupby(group_keys + ['Position Type']).agg({
+        'Quantity Open': 'sum',
+        'Avg Entry Price': lambda x: np.average(open_at_end.loc[x.index, 'Avg Entry Price'], weights=open_at_end.loc[x.index, 'Quantity Open'])
+    }).reset_index()
+    open_summary['Closed Qty'] = 0
+    open_summary['PL'] = 0
+    open_summary['Avg Exit Price'] = np.nan
+    summary = pd.concat([summary, open_summary], ignore_index=True, sort=False)
+
+buy_filter = period_transactions['Amount'] < 0
+sell_filter = period_transactions['Amount'] > 0
+
+if buy_filter.any():
+    num_buy_txns = period_transactions[buy_filter].groupby(group_keys).size().rename('Num Debit Txns')
+    summary = summary.merge(num_buy_txns, on=group_keys, how='left')
+
+if sell_filter.any():
+    num_sell_txns = period_transactions[sell_filter].groupby(group_keys).size().rename('Num Credit Txns')
+    summary = summary.merge(num_sell_txns, on=group_keys, how='left')
+
+summary = summary.fillna(0)
+
+summary = summary.sort_values(['Instrument', 'Option Type', 'Expiration', 'Strike'])
+
+# ── Summary Totals ───────────────────────────────────────────────────────────
+total_realized_pl = summary['PL'].sum()
+
+profitable_contracts = summary[summary['PL'] > 0]
+losing_contracts = summary[summary['PL'] < 0]
+total_profit_qty = profitable_contracts['Closed Qty'].sum()
+total_loss_qty = losing_contracts['Closed Qty'].sum()
+
+# ── Unrealized ───────────────────────────────────────────────────────────────
+if not open_at_end.empty and st.sidebar.button("Fetch Current Prices → Unrealized P/L (period)"):
+    open_at_end['Current Price'] = open_at_end.apply(fetch_current_option_price, axis=1)
+    open_at_end['Unrealized P/L'] = open_at_end.apply(calculate_unrealized, axis=1)
+    total_unrealized = open_at_end['Unrealized P/L'].sum()
 else:
     total_unrealized = 0.0
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4 = st.tabs(["Overview", "Metrics", "Charts", "Data"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Overview (Period)", "MTD Overall", "Charts (Period)", "Data", "Options Summary", "Dashboard"])
 
 with tab1:
-    st.header("Overview")
+    st.header(f"Overview — {start_date} to {end_date} — {', '.join(selected_instr) if selected_instr else 'All'}")
     cols = st.columns(5)
-    cols[0].metric("Total Realized P/L", f"${metrics.get('Total P/L', 0):,.2f}")
-    cols[1].metric("Total Unrealized P/L", f"${total_unrealized:,.2f}")
-    cols[2].metric("Closed Trades", metrics.get('Closed Trades', 0))
-    cols[3].metric("Win Rate", f"{metrics.get('Win Rate %', 0):.1f}%")
-    cols[4].metric("Expectancy", f"${metrics.get('Expectancy', 0):,.2f}")
+    cols[0].metric("Realized P/L", f"${total_pl:,.2f}")
+    cols[1].metric("Unrealized P/L", f"${total_unrealized:,.2f}")
+    cols[2].metric("Closed Trades", period_metrics.get('Closed Trades', 0))
+    cols[3].metric("Profitable Trades", period_metrics.get('Profitable Trades', 0))
+    cols[4].metric("Losing Trades", period_metrics.get('Losing Trades', 0))
 
-    if not trades_df.empty:
-        # Stacked column chart for equity curve (P/L per ticker per day, excluding unmatched sells)
-        trades_df_filtered = trades_df[trades_df['Match Type'] != 'Unmatched Sell']
-        pl_per_date_ticker = trades_df_filtered.groupby(['Exit Date', 'Instrument'])['PL'].sum().reset_index()
-        fig_stack = px.bar(pl_per_date_ticker, x='Exit Date', y='PL', color='Instrument', title="Stacked P/L by Ticker and Date")
-        st.plotly_chart(fig_stack, use_container_width=True)
+    if not closed_trades.empty:
+        daily = closed_trades.groupby(['Exit Date', 'Instrument'])['PL'].sum().reset_index()
+        fig = px.bar(daily, x='Exit Date', y='PL', color='Instrument', title="Daily P/L (stacked by ticker)")
+        st.plotly_chart(fig, use_container_width=True)
 
-    if not open_df.empty:
-        st.subheader("Open Positions")
-        st.dataframe(open_df.style.format({"Avg Entry Price": "${:,.2f}", "Quantity Open": "{:.0f}", "Current Price": "${:,.2f}", "Unrealized P/L": "${:,.2f}"}))
+    if not open_at_end.empty and 'Current Price' in open_at_end.columns:
+        st.subheader("Open Positions at Period End")
+        st.dataframe(open_at_end.style.format({"Avg Entry Price": "${:,.2f}", "Current Price": "${:,.2f}",
+                                               "Unrealized P/L": "${:,.2f}", "Quantity Open": "{:.0f}"}))
+
+with tab2:
+    st.header("Month-to-Date Overall (All Tickers)")
+    today = datetime.today().date()
+    month_start = today.replace(day=1)
+    month_start_dt = pd.to_datetime(month_start)
+
+    df_mtd = df[df['Process Date'] <= pd.to_datetime(today)].copy()
+    trades_mtd, open_mtd = match_trades(df_mtd)
+    closed_mtd = trades_mtd[trades_mtd['Exit Date'] >= month_start_dt].copy()
+    if not include_unmatched:
+        closed_mtd = closed_mtd[closed_mtd['Match Type'] != 'Unmatched Close']
+
+    mtd_metrics = calculate_trade_metrics(closed_mtd)
+    mtd_total_pl = closed_mtd['PL'].sum() if not closed_mtd.empty else 0.0
+
+    if not open_mtd.empty and st.button("Fetch Current Prices → MTD Unrealized P/L"):
+        open_mtd['Current Price'] = open_mtd.apply(fetch_current_option_price, axis=1)
+        open_mtd['Unrealized P/L'] = open_mtd.apply(calculate_unrealized, axis=1)
+        mtd_unreal = open_mtd['Unrealized P/L'].sum()
+    else:
+        mtd_unreal = 0.0
+
+    cols = st.columns(5)
+    cols[0].metric("MTD Realized", f"${mtd_total_pl:,.2f}")
+    cols[1].metric("MTD Unrealized", f"${mtd_unreal:,.2f}")
+    cols[2].metric("MTD Trades", mtd_metrics.get('Closed Trades', 0))
+    cols[3].metric("MTD Profitable Trades", mtd_metrics.get('Profitable Trades', 0))
+    cols[4].metric("MTD Losing Trades", mtd_metrics.get('Losing Trades', 0))
+
+    if not closed_mtd.empty:
+        daily_mtd = closed_mtd.groupby('Exit Date')['PL'].sum().reset_index()
+        fig_mtd = px.bar(daily_mtd, x='Exit Date', y='PL', title=f"MTD Daily P/L — {month_start:%b %Y}")
+        st.plotly_chart(fig_mtd, use_container_width=True)
+
+    # ── Sell Order Statistics (MTD) ──────────────────────────────────────────
+    st.subheader("Sell Order Statistics (MTD) - Long Positions")
+    sell_stats = calculate_sell_order_stats_mtd(closed_mtd)
+    if not sell_stats.empty:
+        st.dataframe(
+            sell_stats.style.format({
+                'Avg Quantity Sold': '{:.2f}',
+                'Avg Profit': '${:,.2f}',
+                'Count': '{:.0f}'
+            }),
+            use_container_width=True
+        )
+        st.caption("Average quantity sold and average profit on 1st sell, 2nd sell, etc., from each buy in MTD.")
+    else:
+        st.info("No matched long sells found for sell-order analysis in MTD.")
 
 with tab3:
-    st.header("Charts")
-    if filtered_df.empty:
-        st.warning("No data")
+    st.header("Charts — Selected Period & Tickers")
+    if closed_trades.empty:
+        st.info("No closed trades in selected period")
     else:
-        pl_by_ticker = filtered_df.groupby('Instrument')['Amount'].sum().reset_index()
-        open_instruments = open_df['Instrument'].unique() if not open_df.empty else []
-        pl_by_ticker['Color'] = pl_by_ticker['Instrument'].apply(lambda x: 'Open' if x in open_instruments else ('Profit' if pl_by_ticker.loc[pl_by_ticker['Instrument'] == x, 'Amount'].values[0] > 0 else 'Loss'))
-        color_map = {'Open': 'blue', 'Profit': 'green', 'Loss': 'red'}
-        fig_bar = px.bar(pl_by_ticker, x='Instrument', y='Amount', title="Raw P/L by Instrument",
-                         color='Color', color_discrete_map=color_map)
+        by_ticker = closed_trades.groupby('Instrument')['PL'].sum().reset_index()
+        fig_bar = px.bar(by_ticker, x='Instrument', y='PL', color=by_ticker['PL'].apply(lambda x: 'Profit' if x>0 else 'Loss'),
+                         color_discrete_map={'Profit':'green','Loss':'red'}, title="Realized P/L by Ticker")
         st.plotly_chart(fig_bar, use_container_width=True)
-        
-        if not trades_df.empty:
-            fig_box = px.box(trades_df, y='PL', title="Box Plot of Trade P/L", points="all")
-            st.plotly_chart(fig_box, use_container_width=True)
-            
-            # Tree Map
-            treemap_data = trades_df.groupby('Instrument')['PL'].sum().reset_index()
-            treemap_data['Absolute PL'] = treemap_data['PL'].abs()
-            treemap_data['Color'] = np.where(treemap_data['PL'] > 0, 'Profit', 'Loss')
-            fig_tree = px.treemap(treemap_data, path=['Color', 'Instrument'], values='Absolute PL',
-                                  color='PL', color_continuous_scale='RdYlGn', title="Tree Map of P/L by Instrument")
-            st.plotly_chart(fig_tree, use_container_width=True)
+
+        fig_box = px.box(closed_trades, y='PL', points="all", title="Trade P/L Distribution")
+        st.plotly_chart(fig_box, use_container_width=True)
+
+        tree = closed_trades.groupby('Instrument')['PL'].sum().reset_index()
+        tree['Abs'] = tree['PL'].abs()
+        tree['Sign'] = tree['PL'].apply(lambda x: 'Profit' if x>0 else 'Loss')
+        fig_tree = px.treemap(tree, path=['Sign', 'Instrument'], values='Abs', color='PL',
+                              color_continuous_scale='RdYlGn', title="P/L Treemap by Ticker")
+        st.plotly_chart(fig_tree, use_container_width=True)
 
 with tab4:
-    st.header("Raw & Matched Data")
-    st.subheader("Raw Transactions")
-    st.dataframe(filtered_df.style.format({
-        "Amount": "${:,.2f}",
-        "Cum PL": "${:,.2f}",
-        "Process Date": "{:%Y-%m-%d}"
-    }))
+    st.subheader("Transactions in Period")
+    st.dataframe(period_transactions.style.format({"Amount": "${:,.2f}", "Process Date": "{:%Y-%m-%d}"}))
 
-    if not trades_df.empty:
-        st.subheader("Matched Closed Positions")
-        st.dataframe(trades_df.style.format({
-            "PL": "${:,.2f}",
-            "Holding Hours": "{:.1f}",
-            "Entry Price": "${:,.2f}",
-            "Exit Price": "${:,.2f}"
-        }))
+    if not closed_trades.empty:
+        st.subheader("Matched Closed Trades in Period")
+        st.dataframe(closed_trades.style.format({"PL": "${:,.2f}", "Entry Price": "${:,.2f}",
+                                                "Exit Price": "${:,.2f}", "Holding Hours": "{:.1f}"}))
+
+with tab5:
+    st.header("Options Summary — Selected Period & Tickers")
+    if summary.empty:
+        st.info("No options transactions in the selected period.")
     else:
-        st.info("No matched closed trades. Check if Prices are filled correctly.")
+        st.dataframe(summary.style.format({
+            "Strike": "${:,.2f}",
+            "Closed Qty": "{:.0f}",
+            "PL": "${:,.2f}",
+            "Avg Entry Price": "${:,.2f}",
+            "Avg Exit Price": "${:,.2f}",
+            "Num Debit Txns": "{:.0f}",
+            "Num Credit Txns": "{:.0f}"
+        }))
 
-# ── Sidebar Metrics ──────────────────────────────────────────────────────────
-st.sidebar.header("Key Trading Metrics")
-if not trades_df.empty:
-    trades_df['Date'] = trades_df['Exit Date'].dt.date
-    trades_df['Month'] = trades_df['Exit Date'].dt.to_period('M').dt.to_timestamp()
-    trades_df['Cost Basis'] = trades_df['Entry Price'] * trades_df['Quantity Closed'] * 100
-    trades_df['% Return'] = trades_df['PL'] / trades_df['Cost Basis'] * 100
+    st.subheader("Summary Totals")
+    cols = st.columns(5)
+    cols[0].metric("Total Realized P/L", f"${total_realized_pl:,.2f}")
+    cols[1].metric("Total Closed Qty", f"{summary['Closed Qty'].sum():.0f}")
 
-    # Group by contract for aggregated % return (to handle splits)
-    contract_group = trades_df.groupby(['Instrument', 'Option Type', 'Expiration', 'Strike'])
-    agg_pl = contract_group['PL'].sum()
-    agg_cost = contract_group['Cost Basis'].sum()
-    agg_pct_return = (agg_pl / agg_cost) * 100
+    st.subheader("Profit/Loss Metrics")
+    cols = st.columns(4)
+    cols[0].metric("Qty Profitable Contracts", f"{total_profit_qty:.0f}")
+    cols[1].metric("Qty Losing Contracts", f"{total_loss_qty:.0f}")
+    cols[2].metric("Num Profitable Contracts", len(profitable_contracts))
+    cols[3].metric("Num Losing Contracts", len(losing_contracts))
 
-    # Highest % winner (contract level)
-    max_pct = agg_pct_return.max()
-    max_pct_contract = agg_pct_return.idxmax() if not np.isnan(max_pct) else None
+with tab6:
+    st.header("Dashboard")
+    if not closed_trades.empty:
+        calendar_data = closed_trades.groupby('Exit Date').agg({'PL': 'sum', 'Instrument': 'count'}).rename(columns={'Instrument': 'Trades'}).reset_index()
+        calendar_data['Date'] = pd.to_datetime(calendar_data['Exit Date'])
+    else:
+        calendar_data = pd.DataFrame(columns=['Date', 'PL', 'Trades'])
 
-    # Lowest % loser (contract level)
-    min_pct = agg_pct_return.min()
-    min_pct_contract = agg_pct_return.idxmin() if not np.isnan(min_pct) else None
+    if not calendar_data.empty:
+        st.subheader(calendar_data['Date'].dt.month_name().iloc[0] + ", " + str(calendar_data['Date'].dt.year.iloc[0]))
+    else:
+        st.subheader("No Data")
+    cols = st.columns(7)
+    for i, day in enumerate(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']):
+        cols[i].write(day)
+    
+    cols = st.columns(7)
+    for i, row in calendar_data.iterrows():
+        col_idx = row['Date'].weekday()
+        with cols[col_idx]:
+            st.metric(str(row['Date'].day), f"${row['PL']:.2f}", delta_color="inverse")
+            st.write(f"{row['Trades']} trades")
 
-    st.sidebar.metric("Highest % Winner (Contract)", f"{max_pct:.2f}% ({max_pct_contract[0] if max_pct_contract else 'N/A'})")
-    st.sidebar.metric("Lowest % Loser (Contract)", f"{min_pct:.2f}% ({min_pct_contract[0] if min_pct_contract else 'N/A'})")
+    if not closed_trades.empty:
+        recent_trades = closed_trades.groupby('Instrument')['PL'].apply(list).reset_index()
+        num_recent = len(recent_trades)
+        if num_recent > 0:
+            recent_dates = closed_trades['Exit Date'].sort_values().tail(num_recent).values
+            recent_trades['Date'] = recent_dates
+        else:
+            recent_trades['Date'] = pd.NaT
+        recent_trades.rename(columns={'PL': 'PL History'}, inplace=True)
+    else:
+        recent_trades = pd.DataFrame(columns=['Instrument', 'PL History', 'Date'])
 
-    # Brainstormed additional metrics
-    st.sidebar.metric("Avg Holding Hours", f"{trades_df['Holding Hours'].mean():.1f}")
-    st.sidebar.metric("Largest Win ($)", f"${trades_df['PL'].max():,.2f}")
-    st.sidebar.metric("Largest Loss ($)", f"${trades_df['PL'].min():,.2f}")
-    st.sidebar.metric("Trades per Day (Avg)", f"{len(trades_df) / (trades_df['Exit Date'].max() - trades_df['Exit Date'].min()).days:.1f}" if (trades_df['Exit Date'].max() - trades_df['Exit Date'].min()).days > 0 else "N/A")
-else:
-    st.sidebar.write("No trades to compute metrics.")
+    st.subheader("Your recent shared trades")
+    cols = st.columns(3)
+    for i in range(min(3, len(recent_trades))):
+        trade = recent_trades.iloc[i]
+        with cols[i]:
+            date_str = trade['Date'].strftime('%Y-%m-%d') if pd.notna(trade['Date']) else 'N/A'
+            st.write(date_str)
+            st.write(trade['Instrument'])
+            fig = px.line(y=trade['PL History'], markers=True)
+            fig.update_layout(showlegend=False, height=150, margin=dict(l=0, r=0, t=0, b=0))
+            st.plotly_chart(fig, use_container_width=True)
+
+    cols = st.columns(4)
+    cols[0].metric("Profit factor", f"{period_metrics.get('Profit Factor', 0):.2f}")
+    cols[1].metric("Winning VS Losing Trades", f"{period_metrics.get('Profitable Trades', 0)} VS {period_metrics.get('Losing Trades', 0)}")
+    cols[2].metric("Average Winning Trade VS Losing Trade", f"${period_metrics.get('Avg Win', 0):.2f} VS {period_metrics.get('Avg Loss', 0):.2f}")
+    cols[3].metric("Hourly", "")
+
+    if not closed_trades.empty:
+        closed_trades['Hour'] = closed_trades['Exit Date'].dt.hour
+        hourly_pl = closed_trades.groupby('Hour')['PL'].sum().reset_index()
+    else:
+        hourly_pl = pd.DataFrame(columns=['Hour', 'PL'])
+
+    fig_hourly = px.bar(hourly_pl, x='Hour', y='PL', color='PL', color_continuous_scale='rdylgn')
+    st.plotly_chart(fig_hourly, use_container_width=True)
+
+    cols = st.columns(4)
+    largest_gain = closed_trades['PL'].max() if not closed_trades.empty else 0
+    gain_loss_ratio = [0, 0]
+    with cols[0]:
+        fig_gauge = go.Figure(go.Indicator(mode = "gauge+number", value = largest_gain, title = {'text': "Largest Gain"}))
+        st.plotly_chart(fig_gauge, use_container_width=True)
+    with cols[1]:
+        fig_donut = px.pie(names=['Gain', 'Loss'], values=gain_loss_ratio, hole=0.3, title="Total Gain Loss")
+        st.plotly_chart(fig_donut, use_container_width=True)
+    with cols[2]:
+        fig_bar_k = px.bar(x=['K Ratio'], y=[period_metrics.get('Risk-Reward Ratio', 0)], title="K Ratio")
+        st.plotly_chart(fig_bar_k, use_container_width=True)
+    with cols[3]:
+        st.metric("Largest Gain", f"${largest_gain:,.2f}")
+
+    st.subheader("Live Market Prices")
+    if not closed_trades.empty:
+        unique_symbols = closed_trades['Instrument'].unique()
+        live_prices = {}
+        for symbol in unique_symbols:
+            if ' ' in symbol or '/' in symbol:
+                live_prices[symbol] = np.nan
+            else:
+                current_price = fetch_current_stock_price(symbol)
+                live_prices[symbol] = current_price
+        live_df = pd.DataFrame(list(live_prices.items()), columns=['Symbol', 'Current Price'])
+        live_df['Current Price'] = live_df['Current Price'].apply(lambda x: f"${x:,.2f}" if not np.isnan(x) else "N/A")
+        st.dataframe(live_df.style.format({"Current Price": lambda x: x}), use_container_width=True)
+    else:
+        st.info("No symbols to fetch live prices for.")
 
 st.markdown("---")
-st.caption("Updated: Stacked chart excludes unmatched sells always + shows profits above/losses below")
+st.markdown("[Support by Grok](https://x.com/grok)", unsafe_allow_html=True)
