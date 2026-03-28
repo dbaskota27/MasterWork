@@ -4,8 +4,10 @@ from PIL import Image
 import database as db
 from config import CURRENCY, TAX_RATE
 from utils import decode_barcode_image, build_receipt_html
+from auth import require_login
 
 st.set_page_config(page_title="Barcode Scanner", page_icon="📷", layout="wide")
+require_login()
 st.title("📷 Barcode Scanner")
 
 

@@ -1,8 +1,10 @@
 import streamlit as st
 import database as db
 from config import STORE_NAME, CURRENCY, TAX_RATE
+from auth import require_login
 
 st.set_page_config(page_title="New Sale", page_icon="🛒", layout="wide")
+require_login()
 st.title("🛒 New Sale — POS")
 
 # ─── Cart init ────────────────────────────────────────────────────────────────

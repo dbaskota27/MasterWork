@@ -5,8 +5,10 @@ from datetime import date, timedelta
 import database as db
 from config import CURRENCY
 from utils import build_receipt_html
+from auth import require_login, is_manager
 
 st.set_page_config(page_title="Invoices", page_icon="🧾", layout="wide")
+require_login()
 st.title("🧾 Invoices & Receipts")
 
 invoices = db.get_invoices()
@@ -73,7 +75,11 @@ st.dataframe(
 )
 
 # ─── Action buttons ────────────────────────────────────────────────────────────
-col_receipt, col_close, col_delete = st.columns([3, 2, 1])
+if is_manager():
+    col_receipt, col_close, col_delete = st.columns([3, 2, 1])
+else:
+    col_receipt, col_close = st.columns([3, 2])
+    col_delete = None
 
 if col_receipt.button("🧾 View Receipt", use_container_width=True, type="primary"):
     st.session_state.view_invoice_id = sel_inv
@@ -82,7 +88,7 @@ if st.session_state.get("view_invoice_id") and col_close.button("✕ Close Recei
     st.session_state.view_invoice_id = None
     st.rerun()
 
-if col_delete.button("🗑️ Delete", use_container_width=True):
+if col_delete and col_delete.button("🗑️ Delete", use_container_width=True):
     db.delete_invoice(sel_inv)
     st.session_state.view_invoice_id = None
     st.success("Invoice deleted.")

@@ -14,3 +14,8 @@ STORE_EMAIL = os.getenv("STORE_EMAIL", "")
 TAX_RATE = float(os.getenv("TAX_RATE", "0"))
 CURRENCY = os.getenv("CURRENCY", "$")
 STORE_PAYMENT_QR = os.getenv("STORE_PAYMENT_QR", "")
+
+MANAGER_USERNAME = os.getenv("MANAGER_USERNAME", "manager")
+MANAGER_PASSWORD = os.getenv("MANAGER_PASSWORD", "admin123")
+WORKER_USERNAME  = os.getenv("WORKER_USERNAME",  "worker")
+WORKER_PASSWORD  = os.getenv("WORKER_PASSWORD",  "worker123")

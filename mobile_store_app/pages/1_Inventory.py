@@ -4,6 +4,7 @@ import numpy as np
 from PIL import Image
 import database as db
 from config import STORE_NAME, CURRENCY
+from auth import require_login, is_manager
 
 
 def _decode_barcode(pil_image: Image.Image):
@@ -33,9 +34,14 @@ def _decode_barcode(pil_image: Image.Image):
     return None, None
 
 st.set_page_config(page_title="Inventory", page_icon="📦", layout="wide")
+require_login()
 st.title("📦 Inventory Management")
 
-tab_list, tab_add, tab_cats = st.tabs(["All Products", "Add Product", "Categories"])
+tabs = ["All Products", "Add Product", "Categories"] if is_manager() else ["All Products"]
+tab_result = st.tabs(tabs)
+tab_list = tab_result[0]
+tab_add  = tab_result[1] if is_manager() else None
+tab_cats = tab_result[2] if is_manager() else None
 
 # ─── All Products ─────────────────────────────────────────────────────────────
 with tab_list:
@@ -90,6 +96,9 @@ with tab_list:
         }
         available = {k: v for k, v in show.items() if k in df.columns}
         st.dataframe(df[list(available.keys())].rename(columns=available), use_container_width=True)
+
+        if not is_manager():
+            st.stop()
 
         st.divider()
         st.subheader("Edit / Delete Product")
@@ -146,6 +155,9 @@ with tab_list:
         st.info("No products found.")
 
 # ─── Add Product ──────────────────────────────────────────────────────────────
+if not is_manager():
+    st.stop()
+
 with tab_add:
     st.subheader("Add New Product")
     categories = db.get_categories()

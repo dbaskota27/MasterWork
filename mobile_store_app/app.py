@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import date
 import database as db
 from config import STORE_NAME, CURRENCY
+from auth import require_login
 
 st.set_page_config(
     page_title=STORE_NAME,
@@ -11,6 +12,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+require_login()
 st.title(f"📱 {STORE_NAME}")
 st.caption("Dashboard")
 

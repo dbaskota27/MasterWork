@@ -4,8 +4,11 @@ import altair as alt
 from datetime import date, timedelta
 import database as db
 from config import CURRENCY
+from auth import require_login, require_manager
 
 st.set_page_config(page_title="Reports", page_icon="📊", layout="wide")
+require_login()
+require_manager()
 st.title("📊 Reports")
 
 tab_sales, tab_inv, tab_cust, tab_products = st.tabs([
