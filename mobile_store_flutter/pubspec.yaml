@@ -1,0 +1,50 @@
+name: mobile_store_app
+description: Mobile Store POS — inventory, sales, invoices, customers, reports.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.2.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Supabase backend
+  supabase_flutter: ^2.5.0
+
+  # Barcode / QR scanning
+  mobile_scanner: ^5.2.3
+
+  # PDF receipt generation
+  pdf: ^3.11.0
+  printing: ^5.13.0
+
+  # QR code display on receipts
+  qr_flutter: ^4.1.0
+
+  # Local storage (remember login)
+  shared_preferences: ^2.3.0
+
+  # Number / date formatting
+  intl: ^0.19.0
+
+  # Image picker (optional product photos)
+  image_picker: ^1.1.2
+
+  # Misc UI
+  flutter_slidable: ^3.1.0
+  cached_network_image: ^3.3.1
+  google_fonts: ^6.2.1
+  gap: ^3.0.1
+  collection: ^1.18.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/
