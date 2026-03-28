@@ -118,15 +118,61 @@ with col_cart:
         st.divider()
 
         # Totals
-        subtotal   = sum(i["total_price"] for i in st.session_state.cart)
-        discount   = st.number_input(f"Discount ({CURRENCY})", min_value=0.0, max_value=float(subtotal), step=0.01, value=0.0)
-        after_disc = subtotal - discount
-        tax_amt    = after_disc * TAX_RATE
-        total      = after_disc + tax_amt
+        subtotal = sum(i["total_price"] for i in st.session_state.cart)
 
-        st.markdown(f"**Subtotal:** {CURRENCY}{subtotal:.2f}")
+        # ── Linked Discount ↔ Customer Pays ───────────────────────────────────
+        # Reset pricing fields when the cart subtotal changes
+        if st.session_state.get("_pos_subtotal") != subtotal:
+            st.session_state._pos_subtotal     = subtotal
+            st.session_state._pos_discount     = 0.0
+            st.session_state._pos_cust_pays    = subtotal
+            st.session_state._pos_last_changed = None
+
+        def _pos_on_discount_change():
+            st.session_state._pos_last_changed = "discount"
+
+        def _pos_on_cust_pays_change():
+            st.session_state._pos_last_changed = "cust_pays"
+
+        # Sync whichever field was changed last
+        if st.session_state._pos_last_changed == "discount":
+            d = max(0.0, min(float(st.session_state._pos_discount), subtotal))
+            st.session_state._pos_cust_pays = round(subtotal - d, 2)
+        elif st.session_state._pos_last_changed == "cust_pays":
+            cp = max(0.0, min(float(st.session_state._pos_cust_pays), subtotal))
+            st.session_state._pos_discount = round(subtotal - cp, 2)
+
+        st.markdown(f"**Marked Price (subtotal):** {CURRENCY}{subtotal:.2f}")
+
+        disc_col, cp_col = st.columns(2)
+        disc_col.number_input(
+            f"Discount ({CURRENCY})",
+            min_value=0.0,
+            max_value=float(subtotal),
+            step=0.01,
+            key="_pos_discount",
+            on_change=_pos_on_discount_change,
+        )
+        cp_col.number_input(
+            f"Customer Pays ({CURRENCY})",
+            min_value=0.0,
+            max_value=float(subtotal),
+            step=0.01,
+            key="_pos_cust_pays",
+            on_change=_pos_on_cust_pays_change,
+        )
+
+        discount   = float(st.session_state._pos_discount)
+        after_disc = float(st.session_state._pos_cust_pays)
+        tax_amt    = round(after_disc * TAX_RATE, 2)
+        total      = round(after_disc + tax_amt, 2)
+
         if discount > 0:
-            st.markdown(f"**Discount:** -{CURRENCY}{discount:.2f}")
+            st.info(
+                f"Marked: **{CURRENCY}{subtotal:.2f}**  →  "
+                f"Discount: **{CURRENCY}{discount:.2f}**  →  "
+                f"Customer Pays: **{CURRENCY}{total:.2f}**"
+            )
         if TAX_RATE > 0:
             st.markdown(f"**Tax ({TAX_RATE*100:.1f}%):** {CURRENCY}{tax_amt:.2f}")
         st.markdown(f"### Total: {CURRENCY}{total:.2f}")
@@ -154,13 +200,27 @@ with col_cart:
         st.divider()
 
         # Payment
-        payment_method = st.selectbox("Payment Method", ["Cash", "Card", "Bank Transfer", "Credit / Due"])
-        amount_paid    = st.number_input(f"Amount Paid ({CURRENCY})", min_value=0.0, value=float(total), step=0.01)
-        change_due     = amount_paid - total
+        pay_col1, pay_col2 = st.columns(2)
+        payment_method = pay_col1.radio(
+            "Payment Method",
+            ["💵 Cash", "⚡ QuickPay"],
+            horizontal=True,
+        )
+        is_quickpay  = payment_method == "⚡ QuickPay"
+        amt_label    = f"Amount Transferred ({CURRENCY})" if is_quickpay else f"Amount Received ({CURRENCY})"
+        amt_help     = "Amount sent via QR / digital payment" if is_quickpay else "Cash handed over by customer"
+
+        amount_paid = pay_col2.number_input(
+            amt_label, min_value=0.0, value=float(total), step=0.01, help=amt_help
+        )
+        change_due  = round(amount_paid - total, 2)
         if change_due > 0:
-            st.success(f"Change Due: {CURRENCY}{change_due:.2f}")
+            label = "Change Due" if not is_quickpay else "Overpaid"
+            st.success(f"{label}: {CURRENCY}{change_due:.2f}")
         elif change_due < 0:
             st.warning(f"Short by: {CURRENCY}{abs(change_due):.2f}")
+
+        payment_method = "QuickPay" if is_quickpay else "Cash"
 
         notes = st.text_area("Notes (optional)", height=60)
 

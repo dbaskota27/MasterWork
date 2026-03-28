@@ -274,19 +274,27 @@ elif st.session_state.scanner_step == "checkout":
 
     # ── Payment ───────────────────────────────────────────────────────────────
     st.subheader("Payment")
-    pay_method  = st.selectbox("Method", ["Cash", "Card", "Bank Transfer", "QR Pay", "Credit / Due"])
-    amount_paid = st.number_input(
-        f"Amount Received ({CURRENCY})",
-        min_value=0.0,
-        value=float(total),
-        step=0.01,
-        help="Cash or amount handed over by customer",
+    pay_col1, pay_col2 = st.columns(2)
+    pay_method = pay_col1.radio(
+        "Payment Method",
+        ["💵 Cash", "⚡ QuickPay"],
+        horizontal=True,
+    )
+    is_quickpay = pay_method == "⚡ QuickPay"
+    amt_label   = f"Amount Transferred ({CURRENCY})" if is_quickpay else f"Amount Received ({CURRENCY})"
+    amt_help    = "Amount sent via QR / digital payment" if is_quickpay else "Cash handed over by customer"
+
+    amount_paid = pay_col2.number_input(
+        amt_label, min_value=0.0, value=float(total), step=0.01, help=amt_help
     )
     change_due = round(amount_paid - total, 2)
     if change_due > 0:
-        st.success(f"Change Due: {CURRENCY}{change_due:.2f}")
+        label = "Change Due" if not is_quickpay else "Overpaid"
+        st.success(f"{label}: {CURRENCY}{change_due:.2f}")
     elif change_due < 0:
         st.warning(f"Short by: {CURRENCY}{abs(change_due):.2f}")
+
+    pay_method = "QuickPay" if is_quickpay else "Cash"
 
     notes = st.text_area("Notes (optional)", height=60)
 

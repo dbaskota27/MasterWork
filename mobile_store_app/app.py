@@ -20,7 +20,14 @@ try:
     invoices  = db.get_invoices()
     customers = db.get_customers()
 except Exception as e:
-    st.error(f"Could not connect to database: {e}")
+    st.error("**Cannot reach the database.**")
+    st.warning(
+        "This usually means your **Supabase project is paused** (free tier pauses after 1 week of inactivity).\n\n"
+        "**To fix:** go to [supabase.com](https://supabase.com) → open your project → click **Restore project**, "
+        "wait ~1 minute, then reload this page."
+    )
+    with st.expander("Technical details"):
+        st.code(str(e))
     st.stop()
 
 # ─── Today / This month stats ─────────────────────────────────────────────────
