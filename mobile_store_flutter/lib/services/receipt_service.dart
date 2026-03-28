@@ -2,17 +2,23 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:intl/intl.dart';
-import '../config.dart';
 import '../models/invoice.dart';
+import 'settings_service.dart';
 
 class ReceiptService {
-  static final _money = NumberFormat.currency(
-    symbol: AppConfig.currency,
-    decimalDigits: 2,
-  );
   static final _dateFormat = DateFormat('MMM d, y  h:mm a');
 
   static Future<pw.Document> buildPdf(Invoice inv) async {
+    // Load live store info
+    final info = await SettingsService.getStoreInfo();
+    final storeName   = info['name']!;
+    final storeAddr   = info['address']!;
+    final storePhone  = info['phone']!;
+    final currency    = info['currency']!;
+    final paymentQr   = info['payment_qr']!;
+
+    final money = NumberFormat.currency(symbol: currency, decimalDigits: 2);
+
     final pdf = pw.Document();
 
     pdf.addPage(pw.Page(
@@ -23,14 +29,14 @@ class ReceiptService {
           // Header
           pw.Center(
             child: pw.Column(children: [
-              pw.Text(AppConfig.storeName,
+              pw.Text(storeName,
                   style: pw.TextStyle(
                       fontSize: 18, fontWeight: pw.FontWeight.bold)),
-              if (AppConfig.storeAddress.isNotEmpty)
-                pw.Text(AppConfig.storeAddress,
+              if (storeAddr.isNotEmpty)
+                pw.Text(storeAddr,
                     style: const pw.TextStyle(fontSize: 9)),
-              if (AppConfig.storePhone.isNotEmpty)
-                pw.Text(AppConfig.storePhone,
+              if (storePhone.isNotEmpty)
+                pw.Text(storePhone,
                     style: const pw.TextStyle(fontSize: 9)),
               pw.SizedBox(height: 4),
               pw.Text('Invoice #${inv.id}',
@@ -59,7 +65,7 @@ class ReceiptService {
                     child: pw.Text('${item.productName} x${item.qty}',
                         style: const pw.TextStyle(fontSize: 10)),
                   ),
-                  pw.Text(_money.format(item.total),
+                  pw.Text(money.format(item.total),
                       style: const pw.TextStyle(fontSize: 10)),
                 ],
               )),
@@ -67,15 +73,15 @@ class ReceiptService {
           pw.Divider(),
 
           // Totals
-          _totalRow('Marked Price', inv.markedPrice),
+          _totalRow(money, 'Marked Price', inv.markedPrice),
           if (inv.discount > 0)
-            _totalRow('Discount', -inv.discount, color: PdfColors.orange),
-          _totalRow('Customer Pays', inv.customerPays,
+            _totalRow(money, 'Discount', -inv.discount, color: PdfColors.orange),
+          _totalRow(money, 'Customer Pays', inv.customerPays,
               bold: true, color: PdfColors.green700),
-          _totalRow('Amount ${inv.paymentType == "cash" ? "Received" : "Transferred"}',
+          _totalRow(money, 'Amount ${inv.paymentType == "cash" ? "Received" : "Transferred"}',
               inv.amountReceived),
           if (inv.change > 0)
-            _totalRow('Change Given', inv.change, bold: true),
+            _totalRow(money, 'Change Given', inv.change, bold: true),
 
           pw.SizedBox(height: 6),
           pw.Center(
@@ -89,14 +95,14 @@ class ReceiptService {
           ),
 
           // QR code placeholder (qr_flutter is for Flutter widgets, not PDF)
-          if (AppConfig.paymentQrLink.isNotEmpty) ...[
+          if (paymentQr.isNotEmpty) ...[
             pw.SizedBox(height: 8),
             pw.Center(
               child: pw.Column(children: [
                 pw.Text('Scan to Pay', style: const pw.TextStyle(fontSize: 9)),
                 pw.BarcodeWidget(
                   barcode: pw.Barcode.qrCode(),
-                  data: AppConfig.paymentQrLink,
+                  data: paymentQr,
                   width: 80,
                   height: 80,
                 ),
@@ -117,7 +123,8 @@ class ReceiptService {
     return pdf;
   }
 
-  static pw.Widget _totalRow(String label, double amount,
+  static pw.Widget _totalRow(
+      NumberFormat money, String label, double amount,
       {bool bold = false, PdfColor? color}) {
     final style = pw.TextStyle(
       fontSize: 10,
@@ -128,7 +135,7 @@ class ReceiptService {
       mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
       children: [
         pw.Text(label, style: style),
-        pw.Text(_money.format(amount), style: style),
+        pw.Text(money.format(amount), style: style),
       ],
     );
   }
