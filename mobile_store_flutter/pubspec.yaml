@@ -10,8 +10,9 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # Supabase backend
-  supabase_flutter: ^2.5.0
+  # Local database (no internet needed)
+  sqflite: ^2.4.2
+  path: ^1.9.1
 
   # Barcode / QR scanning
   mobile_scanner: ^5.2.3
@@ -20,8 +21,12 @@ dependencies:
   pdf: ^3.11.0
   printing: ^5.13.0
 
-  # QR code display on receipts
+  # QR code display
   qr_flutter: ^4.1.0
+
+  # Backup export / import
+  share_plus: ^10.0.0
+  file_picker: ^8.1.7
 
   # Local storage (remember login)
   shared_preferences: ^2.3.0
@@ -29,12 +34,8 @@ dependencies:
   # Number / date formatting
   intl: ^0.19.0
 
-  # Image picker (optional product photos)
-  image_picker: ^1.1.2
-
   # Misc UI
   flutter_slidable: ^3.1.0
-  cached_network_image: ^3.3.1
   google_fonts: ^6.2.1
   gap: ^3.0.1
   collection: ^1.18.0
