@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:intl/intl.dart';
+import '../config.dart';
 import '../models/product.dart';
+import '../models/cart_item.dart';
 import '../services/database_service.dart';
 import '../widgets/checkout_form.dart';
 
@@ -11,19 +14,25 @@ class BarcodeScannerScreen extends StatefulWidget {
   State<BarcodeScannerScreen> createState() => _BarcodeScannerScreenState();
 }
 
-// Steps: camera → result (stock-in, checkout, or add-product)
-enum _Step { camera, stockIn, checkout, addProduct }
+enum _Step { camera, cartReview, checkout, addProduct }
 
 class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
   final MobileScannerController _controller = MobileScannerController();
 
   _Step _step = _Step.camera;
-  bool _processing = false; // DB lookup in progress
+  bool _processing = false;
   bool _torchOn = false;
   String _mode = 'out'; // 'in' | 'out'
 
-  Product? _foundProduct;
-  String? _scannedBarcode;
+  // Cart (Stock OUT)
+  final List<CartItem> _cart = [];
+
+  // Last scanned (used in cartReview step)
+  Product? _lastScanned;
+  int _lastQty = 1;
+
+  // Unknown barcode
+  String? _unknownBarcode;
 
   @override
   void dispose() {
@@ -31,14 +40,27 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
     super.dispose();
   }
 
-  // ── Reset to camera ───────────────────────────────────────────────────────
+  // ── Reset to camera (clear cart too) ─────────────────────────────────────
 
-  Future<void> _reset() async {
+  Future<void> _resetAll() async {
     setState(() {
       _step = _Step.camera;
       _processing = false;
-      _foundProduct = null;
-      _scannedBarcode = null;
+      _cart.clear();
+      _lastScanned = null;
+      _unknownBarcode = null;
+    });
+    await _controller.start();
+  }
+
+  // ── Resume scanning (keep cart) ───────────────────────────────────────────
+
+  Future<void> _scanAnother() async {
+    setState(() {
+      _step = _Step.camera;
+      _processing = false;
+      _lastScanned = null;
+      _unknownBarcode = null;
     });
     await _controller.start();
   }
@@ -50,7 +72,6 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
     final code = capture.barcodes.firstOrNull?.rawValue;
     if (code == null || code.isEmpty) return;
 
-    // Show loading overlay ON TOP of camera — don't switch view yet
     setState(() => _processing = true);
     await _controller.stop();
 
@@ -58,19 +79,44 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
 
     if (!mounted) return;
 
-    setState(() {
-      _scannedBarcode = code;
-      _foundProduct = product;
-      _processing = false;
-
-      if (product == null) {
+    if (product == null) {
+      setState(() {
+        _unknownBarcode = code;
         _step = _Step.addProduct;
-      } else if (_mode == 'in') {
-        _step = _Step.stockIn;
+        _processing = false;
+      });
+      return;
+    }
+
+    if (_mode == 'in') {
+      // Stock In: go directly to stock-in view
+      setState(() {
+        _lastScanned = product;
+        _lastQty = 1;
+        _step = _Step.cartReview; // reuse cartReview for stock-in confirmation
+        _processing = false;
+      });
+    } else {
+      // Stock Out: check if already in cart
+      final existingIdx = _cart.indexWhere((c) => c.product.id == product.id);
+      if (existingIdx >= 0) {
+        _cart[existingIdx].qty++;
+        setState(() {
+          _lastScanned = product;
+          _lastQty = _cart[existingIdx].qty;
+          _step = _Step.cartReview;
+          _processing = false;
+        });
       } else {
-        _step = _Step.checkout;
+        _cart.add(CartItem(product: product, qty: 1));
+        setState(() {
+          _lastScanned = product;
+          _lastQty = 1;
+          _step = _Step.cartReview;
+          _processing = false;
+        });
       }
-    });
+    }
   }
 
   // ── Build ─────────────────────────────────────────────────────────────────
@@ -80,15 +126,38 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
     switch (_step) {
       case _Step.camera:
         return _buildCamera();
-      case _Step.stockIn:
-        return _StockInView(product: _foundProduct!, onDone: _reset);
+      case _Step.cartReview:
+        return _mode == 'in'
+            ? _StockInView(product: _lastScanned!, onDone: _resetAll)
+            : _CartReviewView(
+                lastScanned: _lastScanned!,
+                cart: _cart,
+                onScanAnother: _scanAnother,
+                onCheckout: () => setState(() => _step = _Step.checkout),
+                onQtyChanged: (product, qty) {
+                  setState(() {
+                    final idx = _cart.indexWhere((c) => c.product.id == product.id);
+                    if (idx >= 0) {
+                      if (qty <= 0) {
+                        _cart.removeAt(idx);
+                        if (_cart.isEmpty) _scanAnother();
+                      } else {
+                        _cart[idx].qty = qty;
+                      }
+                    }
+                  });
+                },
+              );
       case _Step.checkout:
-        return CheckoutForm(product: _foundProduct!, onDone: _reset);
+        return CheckoutForm(
+          cart: List.from(_cart),
+          onDone: _resetAll,
+        );
       case _Step.addProduct:
         return _AddProductView(
-          barcode: _scannedBarcode ?? '',
-          onSaved: _reset,
-          onCancel: _reset,
+          barcode: _unknownBarcode ?? '',
+          onSaved: _mode == 'in' ? _resetAll : _scanAnother,
+          onCancel: _scanAnother,
         );
     }
   }
@@ -96,13 +165,9 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
   Widget _buildCamera() {
     return Stack(
       children: [
-        // Camera feed fills screen
-        MobileScanner(
-          controller: _controller,
-          onDetect: _onDetect,
-        ),
+        MobileScanner(controller: _controller, onDetect: _onDetect),
 
-        // Top controls: mode toggle + torch
+        // Mode toggle + torch
         Positioned(
           top: 40,
           left: 12,
@@ -110,13 +175,11 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // Mode toggle
               Card(
                 color: Colors.black54,
                 margin: EdgeInsets.zero,
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 8, vertical: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -136,7 +199,6 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
                 ),
               ),
               const SizedBox(width: 8),
-              // Torch
               GestureDetector(
                 onTap: () {
                   _controller.toggleTorch();
@@ -159,12 +221,38 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
           ),
         ),
 
-        // Scanner frame overlay
+        // Scanner frame
         Positioned.fill(
-          child: IgnorePointer(
-            child: CustomPaint(painter: _FramePainter()),
-          ),
+          child: IgnorePointer(child: CustomPaint(painter: _FramePainter())),
         ),
+
+        // Cart badge (Stock OUT)
+        if (_mode == 'out' && _cart.isNotEmpty)
+          Positioned(
+            top: 40,
+            right: 72,
+            child: GestureDetector(
+              onTap: () => setState(() => _step = _Step.cartReview),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.blue,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.shopping_cart, color: Colors.white, size: 16),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${_cart.fold(0, (s, c) => s + c.qty)} item(s)',
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
 
         // Hint text
         Positioned(
@@ -180,7 +268,7 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
               ),
               child: Text(
                 _mode == 'out'
-                    ? 'Point at barcode to sell'
+                    ? 'Point at barcode to add to cart'
                     : 'Point at barcode to add stock',
                 style: const TextStyle(color: Colors.white, fontSize: 13),
               ),
@@ -188,7 +276,7 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
           ),
         ),
 
-        // Loading overlay — shown WHILE looking up barcode in DB
+        // Loading overlay
         if (_processing)
           Positioned.fill(
             child: Container(
@@ -211,186 +299,172 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
   }
 }
 
-// ── Add Product (unknown barcode) ─────────────────────────────────────────────
+// ── Cart Review ───────────────────────────────────────────────────────────────
 
-class _AddProductView extends StatefulWidget {
-  final String barcode;
-  final VoidCallback onSaved;
-  final VoidCallback onCancel;
+class _CartReviewView extends StatelessWidget {
+  final Product lastScanned;
+  final List<CartItem> cart;
+  final VoidCallback onScanAnother;
+  final VoidCallback onCheckout;
+  final void Function(Product, int) onQtyChanged;
 
-  const _AddProductView({
-    required this.barcode,
-    required this.onSaved,
-    required this.onCancel,
+  const _CartReviewView({
+    required this.lastScanned,
+    required this.cart,
+    required this.onScanAnother,
+    required this.onCheckout,
+    required this.onQtyChanged,
   });
-
-  @override
-  State<_AddProductView> createState() => _AddProductViewState();
-}
-
-class _AddProductViewState extends State<_AddProductView> {
-  final _formKey = GlobalKey<FormState>();
-  late final TextEditingController _name;
-  late final TextEditingController _price;
-  late final TextEditingController _stock;
-  late final TextEditingController _category;
-  bool _saving = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _name = TextEditingController();
-    _price = TextEditingController();
-    _stock = TextEditingController(text: '1');
-    _category = TextEditingController();
-  }
-
-  @override
-  void dispose() {
-    _name.dispose();
-    _price.dispose();
-    _stock.dispose();
-    _category.dispose();
-    super.dispose();
-  }
-
-  Future<void> _save() async {
-    if (!_formKey.currentState!.validate()) return;
-    setState(() => _saving = true);
-    try {
-      await DatabaseService.addProduct(Product(
-        id: 0,
-        name: _name.text.trim(),
-        barcode: widget.barcode,
-        price: double.parse(_price.text),
-        stock: int.parse(_stock.text),
-        category: _category.text.trim().isEmpty ? null : _category.text.trim(),
-      ));
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Product added to inventory!')),
-        );
-        widget.onSaved();
-      }
-    } catch (e) {
-      setState(() => _saving = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Error: $e')));
-      }
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final money = NumberFormat.currency(symbol: AppConfig.currency, decimalDigits: 2);
+    final total = cart.fold(0.0, (s, c) => s + c.total);
 
-    return Scaffold(
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(20),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    return SafeArea(
+      child: Column(
+        children: [
+          // Header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: Row(
               children: [
-                // Header
+                const Icon(Icons.check_circle, color: Colors.green, size: 28),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Added: ${lastScanned.name}',
+                          style: theme.textTheme.titleMedium,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis),
+                      Text('${money.format(lastScanned.price)} each',
+                          style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(),
+
+          // Cart list
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              itemCount: cart.length,
+              itemBuilder: (ctx, i) {
+                final item = cart[i];
+                return Card(
+                  margin: const EdgeInsets.symmetric(vertical: 4),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(item.product.name,
+                                  style: const TextStyle(fontWeight: FontWeight.w500)),
+                              Text(money.format(item.product.price) + ' each',
+                                  style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                            ],
+                          ),
+                        ),
+                        // Qty stepper
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: Icon(
+                                item.qty <= 1 ? Icons.delete_outline : Icons.remove,
+                                color: item.qty <= 1 ? Colors.red : null,
+                                size: 20,
+                              ),
+                              visualDensity: VisualDensity.compact,
+                              onPressed: () =>
+                                  onQtyChanged(item.product, item.qty - 1),
+                            ),
+                            Text('${item.qty}',
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.bold, fontSize: 16)),
+                            IconButton(
+                              icon: const Icon(Icons.add, size: 20),
+                              visualDensity: VisualDensity.compact,
+                              onPressed: () =>
+                                  onQtyChanged(item.product, item.qty + 1),
+                            ),
+                          ],
+                        ),
+                        SizedBox(
+                          width: 70,
+                          child: Text(
+                            money.format(item.total),
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                            textAlign: TextAlign.right,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+
+          // Total + action buttons
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surface,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.08),
+                  blurRadius: 8,
+                  offset: const Offset(0, -2),
+                )
+              ],
+            ),
+            child: Column(
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('Total (${cart.fold(0, (s, c) => s + c.qty)} items)',
+                        style: theme.textTheme.titleMedium),
+                    Text(money.format(total),
+                        style: theme.textTheme.titleLarge?.copyWith(
+                            color: theme.colorScheme.primary,
+                            fontWeight: FontWeight.bold)),
+                  ],
+                ),
+                const SizedBox(height: 12),
                 Row(
                   children: [
-                    const Icon(Icons.search_off, size: 32, color: Colors.orange),
-                    const SizedBox(width: 10),
                     Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('New Product',
-                              style: theme.textTheme.titleLarge),
-                          Text('Barcode: ${widget.barcode}',
-                              style: const TextStyle(
-                                  fontFamily: 'monospace',
-                                  fontSize: 12,
-                                  color: Colors.grey)),
-                        ],
+                      child: OutlinedButton.icon(
+                        icon: const Icon(Icons.qr_code_scanner),
+                        label: const Text('Scan Another'),
+                        onPressed: onScanAnother,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: FilledButton.icon(
+                        icon: const Icon(Icons.point_of_sale),
+                        label: const Text('Checkout'),
+                        onPressed: onCheckout,
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 6),
-                const Text(
-                    'This barcode is not in your inventory yet. '
-                    'Fill in the details to add it.',
-                    style: TextStyle(color: Colors.grey, fontSize: 13)),
-                const Divider(height: 24),
-
-                // Form fields
-                TextFormField(
-                  controller: _name,
-                  decoration: const InputDecoration(labelText: 'Product Name *'),
-                  textCapitalization: TextCapitalization.words,
-                  validator: (v) =>
-                      v == null || v.trim().isEmpty ? 'Required' : null,
-                ),
-                const SizedBox(height: 12),
-                Row(children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _price,
-                      decoration: const InputDecoration(labelText: 'Price *'),
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
-                      validator: (v) {
-                        if (v == null || v.isEmpty) return 'Required';
-                        if (double.tryParse(v) == null) return 'Invalid';
-                        return null;
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextFormField(
-                      controller: _stock,
-                      decoration:
-                          const InputDecoration(labelText: 'Stock Qty'),
-                      keyboardType: TextInputType.number,
-                      validator: (v) =>
-                          int.tryParse(v ?? '') == null ? 'Invalid' : null,
-                    ),
-                  ),
-                ]),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _category,
-                  decoration:
-                      const InputDecoration(labelText: 'Category (optional)'),
-                  textCapitalization: TextCapitalization.words,
-                ),
-                const SizedBox(height: 24),
-
-                Row(children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: widget.onCancel,
-                      child: const Text('Cancel'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: FilledButton(
-                      onPressed: _saving ? null : _save,
-                      child: _saving
-                          ? const SizedBox(
-                              height: 20,
-                              width: 20,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: Colors.white))
-                          : const Text('Add to Inventory'),
-                    ),
-                  ),
-                ]),
               ],
             ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -416,10 +490,7 @@ class _StockInViewState extends State<_StockInView> {
     setState(() => _saving = true);
     try {
       await DatabaseService.adjustStock(widget.product.id, _qty);
-      setState(() {
-        _saving = false;
-        _done = true;
-      });
+      setState(() { _saving = false; _done = true; });
     } catch (e) {
       setState(() => _saving = false);
       if (mounted) {
@@ -473,8 +544,7 @@ class _StockInViewState extends State<_StockInView> {
                 child: Row(
                   children: [
                     CircleAvatar(
-                      backgroundColor:
-                          theme.colorScheme.primaryContainer,
+                      backgroundColor: theme.colorScheme.primaryContainer,
                       child: const Icon(Icons.inventory_2_outlined),
                     ),
                     const SizedBox(width: 12),
@@ -504,8 +574,7 @@ class _StockInViewState extends State<_StockInView> {
                 ),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 24),
-                  child:
-                      Text('$_qty', style: theme.textTheme.headlineLarge),
+                  child: Text('$_qty', style: theme.textTheme.headlineLarge),
                 ),
                 IconButton.filled(
                   onPressed: () => setState(() => _qty++),
@@ -525,8 +594,7 @@ class _StockInViewState extends State<_StockInView> {
                   onPressed: _saving ? null : _confirm,
                   child: _saving
                       ? const SizedBox(
-                          height: 20,
-                          width: 20,
+                          height: 20, width: 20,
                           child: CircularProgressIndicator(
                               strokeWidth: 2, color: Colors.white))
                       : const Text('Confirm'),
@@ -540,7 +608,168 @@ class _StockInViewState extends State<_StockInView> {
   }
 }
 
-// ── Scanner frame overlay ─────────────────────────────────────────────────────
+// ── Add Product (unknown barcode) ─────────────────────────────────────────────
+
+class _AddProductView extends StatefulWidget {
+  final String barcode;
+  final VoidCallback onSaved;
+  final VoidCallback onCancel;
+
+  const _AddProductView({
+    required this.barcode,
+    required this.onSaved,
+    required this.onCancel,
+  });
+
+  @override
+  State<_AddProductView> createState() => _AddProductViewState();
+}
+
+class _AddProductViewState extends State<_AddProductView> {
+  final _formKey  = GlobalKey<FormState>();
+  final _name     = TextEditingController();
+  final _price    = TextEditingController();
+  final _stock    = TextEditingController(text: '1');
+  final _category = TextEditingController();
+  bool _saving    = false;
+
+  @override
+  void dispose() {
+    _name.dispose(); _price.dispose(); _stock.dispose(); _category.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _saving = true);
+    try {
+      await DatabaseService.addProduct(Product(
+        id: 0,
+        name: _name.text.trim(),
+        barcode: widget.barcode,
+        price: double.parse(_price.text),
+        stock: int.parse(_stock.text),
+        category: _category.text.trim().isEmpty ? null : _category.text.trim(),
+      ));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Product added to inventory!')));
+        widget.onSaved();
+      }
+    } catch (e) {
+      setState(() => _saving = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Error: $e')));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Scaffold(
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          child: Form(
+            key: _formKey,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  const Icon(Icons.search_off, size: 32, color: Colors.orange),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('New Product', style: theme.textTheme.titleLarge),
+                        Text('Barcode: ${widget.barcode}',
+                            style: const TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: 12,
+                                color: Colors.grey)),
+                      ],
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: 6),
+                const Text(
+                    'This barcode is not in your inventory yet. '
+                    'Fill in the details to add it.',
+                    style: TextStyle(color: Colors.grey, fontSize: 13)),
+                const Divider(height: 24),
+                TextFormField(
+                  controller: _name,
+                  decoration: const InputDecoration(labelText: 'Product Name *'),
+                  textCapitalization: TextCapitalization.words,
+                  validator: (v) =>
+                      v == null || v.trim().isEmpty ? 'Required' : null,
+                ),
+                const SizedBox(height: 12),
+                Row(children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: _price,
+                      decoration: const InputDecoration(labelText: 'Price *'),
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      validator: (v) {
+                        if (v == null || v.isEmpty) return 'Required';
+                        if (double.tryParse(v) == null) return 'Invalid';
+                        return null;
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextFormField(
+                      controller: _stock,
+                      decoration: const InputDecoration(labelText: 'Stock Qty'),
+                      keyboardType: TextInputType.number,
+                      validator: (v) =>
+                          int.tryParse(v ?? '') == null ? 'Invalid' : null,
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _category,
+                  decoration:
+                      const InputDecoration(labelText: 'Category (optional)'),
+                  textCapitalization: TextCapitalization.words,
+                ),
+                const SizedBox(height: 24),
+                Row(children: [
+                  Expanded(
+                    child: OutlinedButton(
+                        onPressed: widget.onCancel,
+                        child: const Text('Cancel')),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: _saving ? null : _save,
+                      child: _saving
+                          ? const SizedBox(
+                              height: 20, width: 20,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white))
+                          : const Text('Add to Inventory'),
+                    ),
+                  ),
+                ]),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Scanner overlay ───────────────────────────────────────────────────────────
 
 class _FramePainter extends CustomPainter {
   @override
@@ -584,8 +813,6 @@ class _FramePainter extends CustomPainter {
   bool shouldRepaint(_) => false;
 }
 
-// ── Mode chip ─────────────────────────────────────────────────────────────────
-
 class _ModeChip extends StatelessWidget {
   final String label;
   final bool selected;
@@ -602,8 +829,7 @@ class _ModeChip extends StatelessWidget {
         decoration: BoxDecoration(
           color: selected ? Colors.blue : Colors.transparent,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-              color: selected ? Colors.blue : Colors.white54),
+          border: Border.all(color: selected ? Colors.blue : Colors.white54),
         ),
         child: Text(label,
             style: const TextStyle(color: Colors.white, fontSize: 12)),
