@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
-import 'login_screen.dart';
+import '../services/subscription_service.dart';
 import 'inventory_screen.dart';
 import 'new_sale_screen.dart';
 import 'invoices_screen.dart';
@@ -20,8 +20,8 @@ class _HomeScreenState extends State<HomeScreen> {
   int _selectedIndex = 0;
 
   late final List<_NavItem> _items = [
-    _NavItem(label: 'Scanner',   icon: Icons.qr_code_scanner,    screen: const BarcodeScannerScreen()),
-    _NavItem(label: 'New Sale',  icon: Icons.point_of_sale,       screen: const NewSaleScreen()),
+    _NavItem(label: 'Scanner',   icon: Icons.qr_code_scanner,     screen: const BarcodeScannerScreen()),
+    _NavItem(label: 'New Sale',  icon: Icons.point_of_sale,        screen: const NewSaleScreen()),
     _NavItem(label: 'Inventory', icon: Icons.inventory_2_outlined, screen: const InventoryScreen()),
     _NavItem(label: 'Invoices',  icon: Icons.receipt_long,         screen: const InvoicesScreen()),
     _NavItem(label: 'Customers', icon: Icons.people_outline,       screen: const CustomersScreen()),
@@ -36,7 +36,7 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: Text(_items[_selectedIndex].label),
         actions: [
-          // Role badge
+          // Role + subscription badge
           Container(
             margin: const EdgeInsets.only(right: 8),
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -47,9 +47,9 @@ class _HomeScreenState extends State<HomeScreen> {
               borderRadius: BorderRadius.circular(12),
             ),
             child: Text(
-              '${AuthService.username} · ${AuthService.role}',
+              '${AuthService.displayName ?? AuthService.userEmail ?? ""} · ${AuthService.role ?? ""}',
               style: TextStyle(
-                fontSize: 12,
+                fontSize: 11,
                 color: AuthService.isManager
                     ? Colors.blue.shade800
                     : Colors.green.shade800,

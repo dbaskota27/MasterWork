@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
-import '../config.dart';
 import '../services/auth_service.dart';
+import '../services/subscription_service.dart';
+import 'signup_screen.dart';
+import 'store_setup_screen.dart';
 import 'home_screen.dart';
+import 'subscription_wall_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -11,7 +14,7 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final _usernameCtrl = TextEditingController();
+  final _emailCtrl    = TextEditingController();
   final _passwordCtrl = TextEditingController();
   bool _loading = false;
   bool _obscure = true;
@@ -19,27 +22,83 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   void dispose() {
-    _usernameCtrl.dispose();
+    _emailCtrl.dispose();
     _passwordCtrl.dispose();
     super.dispose();
   }
 
   Future<void> _login() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    final ok =
-        await AuthService.login(_usernameCtrl.text, _passwordCtrl.text);
-    if (!mounted) return;
-    setState(() => _loading = false);
+    final email = _emailCtrl.text.trim();
+    final password = _passwordCtrl.text;
+    if (email.isEmpty || password.isEmpty) {
+      setState(() => _error = 'Please enter email and password.');
+      return;
+    }
 
-    if (ok) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const HomeScreen()),
+    setState(() { _loading = true; _error = null; });
+
+    try {
+      await AuthService.login(email: email, password: password);
+
+      if (!mounted) return;
+
+      // No store linked yet? → store setup
+      if (AuthService.storeId == null) {
+        _goTo(const StoreSetupScreen());
+        return;
+      }
+
+      // Check subscription
+      final sub = await SubscriptionService.check();
+      if (!mounted) return;
+
+      if (SubscriptionService.isActive) {
+        _goTo(const HomeScreen());
+      } else {
+        _goTo(const SubscriptionWallScreen());
+      }
+    } catch (e) {
+      setState(() {
+        _loading = false;
+        _error = _friendlyError(e.toString());
+      });
+    }
+  }
+
+  void _goTo(Widget screen) {
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (_) => screen),
+    );
+  }
+
+  String _friendlyError(String msg) {
+    if (msg.contains('Invalid login')) return 'Invalid email or password.';
+    if (msg.contains('Email not confirmed')) return 'Check your email to confirm your account.';
+    if (msg.contains('network')) return 'No internet connection.';
+    return 'Login failed. Please try again.';
+  }
+
+  Future<void> _forgotPassword() async {
+    final email = _emailCtrl.text.trim();
+    if (email.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter your email first, then tap Forgot Password.')),
       );
-    } else {
-      setState(() => _error = 'Invalid username or password.');
+      return;
+    }
+    try {
+      await AuthService.sendPasswordReset(email);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Password reset link sent to $email')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
     }
   }
 
@@ -59,33 +118,27 @@ class _LoginScreenState extends State<LoginScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Logo / title
                     Icon(Icons.storefront_rounded,
                         size: 64, color: theme.colorScheme.primary),
                     const SizedBox(height: 8),
-                    Text(
-                      AppConfig.storeName,
-                      style: theme.textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
+                    Text('Mobile Store',
+                        style: theme.textTheme.headlineSmall
+                            ?.copyWith(fontWeight: FontWeight.bold)),
                     const SizedBox(height: 4),
-                    Text('Point of Sale',
+                    Text('Sign in to your account',
                         style: theme.textTheme.bodyMedium?.copyWith(
-                          color: theme.colorScheme.onSurface.withOpacity(0.6),
-                        )),
+                            color: theme.colorScheme.onSurface.withOpacity(0.6))),
                     const SizedBox(height: 28),
 
-                    // Username
+                    // Email
                     TextField(
-                      controller: _usernameCtrl,
+                      controller: _emailCtrl,
                       decoration: const InputDecoration(
-                        labelText: 'Username',
-                        prefixIcon: Icon(Icons.person_outline),
+                        labelText: 'Email',
+                        prefixIcon: Icon(Icons.email_outlined),
                       ),
+                      keyboardType: TextInputType.emailAddress,
                       textInputAction: TextInputAction.next,
-                      onSubmitted: (_) => FocusScope.of(context).nextFocus(),
                     ),
                     const SizedBox(height: 16),
 
@@ -108,14 +161,22 @@ class _LoginScreenState extends State<LoginScreen> {
                       onSubmitted: (_) => _login(),
                     ),
 
+                    // Forgot password
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton(
+                        onPressed: _forgotPassword,
+                        child: const Text('Forgot Password?', style: TextStyle(fontSize: 13)),
+                      ),
+                    ),
+
                     if (_error != null) ...[
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 4),
                       Text(_error!,
-                          style: TextStyle(
-                              color: theme.colorScheme.error, fontSize: 13)),
+                          style: TextStyle(color: theme.colorScheme.error, fontSize: 13)),
                     ],
 
-                    const SizedBox(height: 24),
+                    const SizedBox(height: 16),
 
                     SizedBox(
                       width: double.infinity,
@@ -123,13 +184,25 @@ class _LoginScreenState extends State<LoginScreen> {
                         onPressed: _loading ? null : _login,
                         child: _loading
                             ? const SizedBox(
-                                height: 20,
-                                width: 20,
+                                height: 20, width: 20,
                                 child: CircularProgressIndicator(
-                                    strokeWidth: 2, color: Colors.white),
-                              )
-                            : const Text('Login'),
+                                    strokeWidth: 2, color: Colors.white))
+                            : const Text('Sign In'),
                       ),
+                    ),
+
+                    const SizedBox(height: 16),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Text("Don't have an account?"),
+                        TextButton(
+                          onPressed: () => Navigator.of(context).push(
+                            MaterialPageRoute(builder: (_) => const SignupScreen()),
+                          ),
+                          child: const Text('Sign Up'),
+                        ),
+                      ],
                     ),
                   ],
                 ),

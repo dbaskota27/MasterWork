@@ -3,19 +3,19 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:intl/intl.dart';
 import '../models/invoice.dart';
-import 'settings_service.dart';
+import 'database_service.dart';
 
 class ReceiptService {
   static final _dateFormat = DateFormat('MMM d, y  h:mm a');
 
   static Future<pw.Document> buildPdf(Invoice inv) async {
-    // Load live store info
-    final info = await SettingsService.getStoreInfo();
-    final storeName   = info['name']!;
-    final storeAddr   = info['address']!;
-    final storePhone  = info['phone']!;
-    final currency    = info['currency']!;
-    final paymentQr   = info['payment_qr']!;
+    // Load live store info from Supabase
+    final info = await DatabaseService.getStoreInfo();
+    final storeName  = info['name'] as String? ?? 'Store';
+    final storeAddr  = info['address'] as String? ?? '';
+    final storePhone = info['phone'] as String? ?? '';
+    final currency   = info['currency'] as String? ?? '\$';
+    final paymentQr  = info['payment_qr'] as String? ?? '';
 
     final money = NumberFormat.currency(symbol: currency, decimalDigits: 2);
 
@@ -30,17 +30,13 @@ class ReceiptService {
           pw.Center(
             child: pw.Column(children: [
               pw.Text(storeName,
-                  style: pw.TextStyle(
-                      fontSize: 18, fontWeight: pw.FontWeight.bold)),
+                  style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
               if (storeAddr.isNotEmpty)
-                pw.Text(storeAddr,
-                    style: const pw.TextStyle(fontSize: 9)),
+                pw.Text(storeAddr, style: const pw.TextStyle(fontSize: 9)),
               if (storePhone.isNotEmpty)
-                pw.Text(storePhone,
-                    style: const pw.TextStyle(fontSize: 9)),
+                pw.Text(storePhone, style: const pw.TextStyle(fontSize: 9)),
               pw.SizedBox(height: 4),
-              pw.Text('Invoice #${inv.id}',
-                  style: const pw.TextStyle(fontSize: 10)),
+              pw.Text('Invoice #${inv.id}', style: const pw.TextStyle(fontSize: 10)),
               pw.Text(_dateFormat.format(inv.createdAt),
                   style: const pw.TextStyle(fontSize: 9)),
             ]),
@@ -78,7 +74,8 @@ class ReceiptService {
             _totalRow(money, 'Discount', -inv.discount, color: PdfColors.orange),
           _totalRow(money, 'Customer Pays', inv.customerPays,
               bold: true, color: PdfColors.green700),
-          _totalRow(money, 'Amount ${inv.paymentType == "cash" ? "Received" : "Transferred"}',
+          _totalRow(money,
+              'Amount ${inv.paymentType == "cash" ? "Received" : "Transferred"}',
               inv.amountReceived),
           if (inv.change > 0)
             _totalRow(money, 'Change Given', inv.change, bold: true),
@@ -94,7 +91,7 @@ class ReceiptService {
             ),
           ),
 
-          // QR code placeholder (qr_flutter is for Flutter widgets, not PDF)
+          // QR code
           if (paymentQr.isNotEmpty) ...[
             pw.SizedBox(height: 8),
             pw.Center(
@@ -113,8 +110,7 @@ class ReceiptService {
           pw.SizedBox(height: 8),
           pw.Center(
             child: pw.Text('Thank you for your business!',
-                style: pw.TextStyle(
-                    fontSize: 10, fontWeight: pw.FontWeight.bold)),
+                style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
           ),
         ],
       ),
@@ -140,7 +136,6 @@ class ReceiptService {
     );
   }
 
-  /// Share/print via the OS share sheet.
   static Future<void> shareReceipt(Invoice inv) async {
     final pdf = await buildPdf(inv);
     await Printing.sharePdf(
@@ -149,11 +144,8 @@ class ReceiptService {
     );
   }
 
-  /// Open the system print dialog.
   static Future<void> printReceipt(Invoice inv) async {
     final pdf = await buildPdf(inv);
-    await Printing.layoutPdf(
-      onLayout: (_) async => pdf.save(),
-    );
+    await Printing.layoutPdf(onLayout: (_) async => pdf.save());
   }
 }

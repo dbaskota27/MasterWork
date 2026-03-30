@@ -1,17 +1,43 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'config.dart';
 import 'services/auth_service.dart';
+import 'services/subscription_service.dart';
 import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
+import 'screens/store_setup_screen.dart';
+import 'screens/subscription_wall_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  await Supabase.initialize(
+    url: AppConfig.supabaseUrl,
+    anonKey: AppConfig.supabaseAnonKey,
+  );
+
+  // Determine start screen
+  Widget startScreen;
+
   final hasSession = await AuthService.restoreSession();
-  runApp(MobileStoreApp(loggedIn: hasSession));
+
+  if (!hasSession) {
+    startScreen = const LoginScreen();
+  } else if (AuthService.storeId == null) {
+    startScreen = const StoreSetupScreen();
+  } else {
+    final sub = await SubscriptionService.check();
+    startScreen = SubscriptionService.isActive
+        ? const HomeScreen()
+        : const SubscriptionWallScreen();
+  }
+
+  runApp(MobileStoreApp(startScreen: startScreen));
 }
 
 class MobileStoreApp extends StatelessWidget {
-  final bool loggedIn;
-  const MobileStoreApp({super.key, required this.loggedIn});
+  final Widget startScreen;
+  const MobileStoreApp({super.key, required this.startScreen});
 
   @override
   Widget build(BuildContext context) {
@@ -37,7 +63,7 @@ class MobileStoreApp extends StatelessWidget {
           filled: true,
         ),
       ),
-      home: loggedIn ? const HomeScreen() : const LoginScreen(),
+      home: startScreen,
     );
   }
 }
