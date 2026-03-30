@@ -7,7 +7,11 @@ import 'auth_service.dart';
 
 class DatabaseService {
   static SupabaseClient get _db => Supabase.instance.client;
-  static String get _storeId => AuthService.storeId!;
+  static String get _storeId {
+    final id = AuthService.storeId;
+    if (id == null) throw Exception('No store linked. Please set up your store first.');
+    return id;
+  }
 
   // ── Products ──────────────────────────────────────────────────────────────
 

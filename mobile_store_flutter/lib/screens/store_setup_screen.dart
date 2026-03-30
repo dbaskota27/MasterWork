@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
-import '../services/subscription_service.dart';
 import 'home_screen.dart';
 
 class StoreSetupScreen extends StatefulWidget {
@@ -41,8 +40,6 @@ class _StoreSetupScreenState extends State<StoreSetupScreen> {
         email:       _emailCtrl.text.trim(),
         displayName: _displayCtrl.text.trim(),
       );
-
-      await SubscriptionService.check();
 
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
@@ -149,7 +146,7 @@ class _StoreSetupScreenState extends State<StoreSetupScreen> {
                                   height: 20, width: 20,
                                   child: CircularProgressIndicator(
                                       strokeWidth: 2, color: Colors.white))
-                              : const Text('Start 7-Day Free Trial'),
+                              : const Text('Get Started'),
                         ),
                       ),
                     ],

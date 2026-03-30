@@ -1,7 +1,13 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../config.dart';
 
 class AuthService {
   static SupabaseClient get _db => Supabase.instance.client;
+  // Separate client for creating worker accounts without signing out the manager
+  static final SupabaseClient _adminClient = SupabaseClient(
+    AppConfig.supabaseUrl,
+    AppConfig.supabaseAnonKey,
+  );
 
   // Cached session data
   static String? _storeId;
@@ -22,23 +28,29 @@ class AuthService {
     final user = _db.auth.currentUser;
     if (user == null) return false;
 
-    final row = await _db
-        .from('store_users')
-        .select('store_id, role, display_name')
-        .eq('user_id', user.id)
-        .maybeSingle();
+    try {
+      // Use RPC to bypass RLS — guaranteed to find the user's profile
+      final rows = await _db.rpc('get_my_profile');
+      final list = rows as List;
 
-    if (row == null) {
+      if (list.isEmpty) {
+        _storeId = null;
+        _role = null;
+        _displayName = null;
+        return false;
+      }
+
+      final row = list.first as Map<String, dynamic>;
+      _storeId     = row['store_id'] as String;
+      _role        = row['role'] as String;
+      _displayName = row['display_name'] as String?;
+      return true;
+    } catch (e) {
       _storeId = null;
       _role = null;
       _displayName = null;
       return false;
     }
-
-    _storeId     = row['store_id'] as String;
-    _role        = row['role'] as String;
-    _displayName = row['display_name'] as String?;
-    return true;
   }
 
   /// Check if there's a valid Supabase session.
@@ -103,22 +115,13 @@ class AuthService {
     final user = _db.auth.currentUser;
     if (user == null) throw Exception('Not authenticated');
 
-    // Create the store
-    final storeRow = await _db.from('stores').insert({
-      'name':    storeName,
-      'address': address,
-      'phone':   phone,
-      'email':   email,
-    }).select().single();
-
-    final storeId = storeRow['id'] as String;
-
-    // Link this user as manager
-    await _db.from('store_users').insert({
-      'user_id':      user.id,
-      'store_id':     storeId,
-      'role':         'manager',
-      'display_name': displayName,
+    // Use RPC to create store + link user atomically (bypasses RLS)
+    await _db.rpc('create_store_with_owner', params: {
+      'p_name':         storeName,
+      'p_address':      address,
+      'p_phone':        phone,
+      'p_email':        email,
+      'p_display_name': displayName,
     });
 
     // Refresh cached data
@@ -127,46 +130,57 @@ class AuthService {
 
   // ── Worker Management ─────────────────────────────────────────────────────
 
-  /// Invite a worker — creates a Supabase auth user via the API.
-  /// The worker will receive an email to set their password.
-  static Future<void> inviteWorker({
+  /// Create a worker account and link to the manager's store.
+  /// Uses a separate client so the manager stays logged in.
+  static Future<void> createWorker({
     required String email,
+    required String password,
     required String displayName,
     required String role,
   }) async {
     if (_storeId == null) throw Exception('No store linked');
 
-    // Use admin invite (via Supabase edge function or manual)
-    // For now, we create the store_user entry. Worker must sign up with
-    // the same email, then we link them.
-    // Simple approach: store the pending invite
-    await _db.from('store_users').insert({
-      'user_id':      '00000000-0000-0000-0000-000000000000', // placeholder
-      'store_id':     _storeId,
-      'role':         role,
-      'display_name': displayName,
+    // Create auth user using a separate client (manager stays signed in)
+    final response = await _adminClient.auth.signUp(
+      email: email.trim(),
+      password: password,
+    );
+
+    final workerId = response.user?.id;
+    if (workerId == null) {
+      throw Exception('Failed to create worker account.');
+    }
+
+    // Sign out the separate client so it doesn't hold a session
+    await _adminClient.auth.signOut();
+
+    // Link worker to manager's store via RPC
+    await _db.rpc('add_worker_to_store', params: {
+      'p_worker_user_id': workerId,
+      'p_display_name': displayName,
+      'p_role': role,
     });
   }
 
-  /// Get all users for the current store.
+  /// Get all users for the current store via RPC.
   static Future<List<Map<String, dynamic>>> getStoreUsers() async {
     if (_storeId == null) return [];
-    final rows = await _db
-        .from('store_users')
-        .select('id, user_id, role, display_name, created_at')
-        .eq('store_id', _storeId!)
-        .order('created_at');
-    return List<Map<String, dynamic>>.from(rows);
+    final rows = await _db.rpc('get_store_workers');
+    return List<Map<String, dynamic>>.from(rows as List);
   }
 
-  /// Update a store user's role or display name.
-  static Future<void> updateStoreUser(String id, Map<String, dynamic> data) async {
-    await _db.from('store_users').update(data).eq('id', id);
+  /// Update a store user's role or display name via RPC.
+  static Future<void> updateStoreUser(String id, {required String displayName, required String role}) async {
+    await _db.rpc('update_worker', params: {
+      'p_id': id,
+      'p_display_name': displayName,
+      'p_role': role,
+    });
   }
 
-  /// Delete a store user.
+  /// Delete a store user via RPC.
   static Future<void> deleteStoreUser(String id) async {
-    await _db.from('store_users').delete().eq('id', id);
+    await _db.rpc('delete_worker', params: {'p_id': id});
   }
 
   /// Change the current user's password.

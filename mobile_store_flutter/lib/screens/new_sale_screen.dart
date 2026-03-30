@@ -392,8 +392,10 @@ class _ProductPickerSheetState extends State<_ProductPickerSheet> {
                 }
                 final products = (snap.data ?? [])
                     .where((p) =>
-                        p.name.toLowerCase().contains(_search) &&
-                        p.stock > 0)
+                        p.stock > 0 &&
+                        (_search.isEmpty ||
+                         p.name.toLowerCase().contains(_search) ||
+                         (p.barcode?.toLowerCase().contains(_search) ?? false)))
                     .toList();
                 if (products.isEmpty) {
                   return const Center(child: Text('No products in stock.'));

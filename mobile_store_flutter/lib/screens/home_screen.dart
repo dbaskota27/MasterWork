@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
-import '../services/subscription_service.dart';
 import 'inventory_screen.dart';
 import 'new_sale_screen.dart';
 import 'invoices_screen.dart';

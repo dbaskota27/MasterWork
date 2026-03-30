@@ -2,11 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'config.dart';
 import 'services/auth_service.dart';
-import 'services/subscription_service.dart';
 import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/store_setup_screen.dart';
-import 'screens/subscription_wall_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -16,20 +14,22 @@ void main() async {
     anonKey: AppConfig.supabaseAnonKey,
   );
 
-  // Determine start screen
+  // Determine start screen — wrap in try/catch so the app always opens
   Widget startScreen;
 
-  final hasSession = await AuthService.restoreSession();
+  try {
+    final hasSession = await AuthService.restoreSession();
 
-  if (!hasSession) {
+    if (!hasSession) {
+      startScreen = const LoginScreen();
+    } else if (AuthService.storeId == null) {
+      startScreen = const StoreSetupScreen();
+    } else {
+      startScreen = const HomeScreen();
+    }
+  } catch (e) {
+    // If anything fails (network, DB, etc.), fall back to login
     startScreen = const LoginScreen();
-  } else if (AuthService.storeId == null) {
-    startScreen = const StoreSetupScreen();
-  } else {
-    final sub = await SubscriptionService.check();
-    startScreen = SubscriptionService.isActive
-        ? const HomeScreen()
-        : const SubscriptionWallScreen();
   }
 
   runApp(MobileStoreApp(startScreen: startScreen));

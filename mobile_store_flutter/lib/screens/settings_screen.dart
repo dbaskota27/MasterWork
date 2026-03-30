@@ -5,7 +5,6 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:intl/intl.dart';
 import '../services/auth_service.dart';
-import '../services/subscription_service.dart';
 import '../services/database_service.dart';
 import 'login_screen.dart';
 
@@ -22,10 +21,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        // Subscription status
-        _SubscriptionCard(),
-        const SizedBox(height: 12),
-
         // Store Info (manager)
         if (AuthService.isManager)
           _SectionTile(
@@ -186,51 +181,6 @@ class _SectionTile extends StatelessWidget {
         subtitle: Text(subtitle, style: const TextStyle(fontSize: 12)),
         trailing: const Icon(Icons.chevron_right),
         onTap: onTap,
-      ),
-    );
-  }
-}
-
-// ── Subscription card ─────────────────────────────────────────────────────────
-
-class _SubscriptionCard extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    final isActive = SubscriptionService.isActive;
-    final label = SubscriptionService.statusLabel;
-    final expiry = SubscriptionService.expiry;
-
-    return Card(
-      color: isActive ? Colors.green.shade50 : Colors.orange.shade50,
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            Icon(
-              isActive ? Icons.verified_outlined : Icons.warning_outlined,
-              color: isActive ? Colors.green.shade700 : Colors.orange.shade700,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Subscription: $label',
-                      style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: isActive
-                              ? Colors.green.shade700
-                              : Colors.orange.shade700)),
-                  if (expiry != null)
-                    Text(
-                        'Expires: ${DateFormat('MMM d, y').format(expiry)}',
-                        style: const TextStyle(fontSize: 12, color: Colors.grey)),
-                ],
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -573,7 +523,10 @@ class _UserManagementScreenState extends State<_UserManagementScreen> {
   void _showAddDialog() {
     final nameCtrl  = TextEditingController();
     final emailCtrl = TextEditingController();
+    final passCtrl  = TextEditingController();
     String role = 'worker';
+    bool saving = false;
+    String? error;
 
     showModalBottomSheet(
       context: context,
@@ -587,23 +540,29 @@ class _UserManagementScreenState extends State<_UserManagementScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('Add User', style: Theme.of(ctx).textTheme.titleLarge),
+              Text('Add Worker', style: Theme.of(ctx).textTheme.titleLarge),
               const SizedBox(height: 8),
               const Text(
-                'The user must sign up with this same email to access the store.',
+                'Create a login account for your worker.',
                 style: TextStyle(fontSize: 12, color: Colors.grey),
               ),
               const SizedBox(height: 16),
               TextField(
                 controller: nameCtrl,
-                decoration: const InputDecoration(labelText: 'Display Name'),
+                decoration: const InputDecoration(labelText: 'Display Name *'),
                 textCapitalization: TextCapitalization.words,
               ),
               const SizedBox(height: 12),
               TextField(
                 controller: emailCtrl,
-                decoration: const InputDecoration(labelText: 'Email'),
+                decoration: const InputDecoration(labelText: 'Email *'),
                 keyboardType: TextInputType.emailAddress,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: passCtrl,
+                decoration: const InputDecoration(labelText: 'Password *'),
+                obscureText: true,
               ),
               const SizedBox(height: 12),
               Row(children: [
@@ -626,6 +585,10 @@ class _UserManagementScreenState extends State<_UserManagementScreen> {
                   ),
                 ),
               ]),
+              if (error != null) ...[
+                const SizedBox(height: 8),
+                Text(error!, style: const TextStyle(color: Colors.red, fontSize: 13)),
+              ],
               const SizedBox(height: 16),
               Row(children: [
                 Expanded(
@@ -636,16 +599,34 @@ class _UserManagementScreenState extends State<_UserManagementScreen> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: FilledButton(
-                    onPressed: () async {
-                      await AuthService.inviteWorker(
-                        email: emailCtrl.text.trim(),
-                        displayName: nameCtrl.text.trim(),
-                        role: role,
-                      );
-                      if (ctx.mounted) Navigator.pop(ctx);
-                      _load();
+                    onPressed: saving ? null : () async {
+                      if (nameCtrl.text.trim().isEmpty ||
+                          emailCtrl.text.trim().isEmpty ||
+                          passCtrl.text.length < 6) {
+                        setSheetState(() => error = 'Fill all fields. Password min 6 chars.');
+                        return;
+                      }
+                      setSheetState(() { saving = true; error = null; });
+                      try {
+                        await AuthService.createWorker(
+                          email: emailCtrl.text.trim(),
+                          password: passCtrl.text,
+                          displayName: nameCtrl.text.trim(),
+                          role: role,
+                        );
+                        if (ctx.mounted) Navigator.pop(ctx);
+                        _load();
+                      } catch (e) {
+                        setSheetState(() {
+                          saving = false;
+                          error = e.toString().replaceAll('Exception: ', '');
+                        });
+                      }
                     },
-                    child: const Text('Add'),
+                    child: saving
+                        ? const SizedBox(height: 20, width: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Text('Create Account'),
                   ),
                 ),
               ]),
@@ -712,10 +693,11 @@ class _UserManagementScreenState extends State<_UserManagementScreen> {
                 Expanded(
                   child: FilledButton(
                     onPressed: () async {
-                      await AuthService.updateStoreUser(user['id'], {
-                        'display_name': nameCtrl.text.trim(),
-                        'role': role,
-                      });
+                      await AuthService.updateStoreUser(
+                        user['id'],
+                        displayName: nameCtrl.text.trim(),
+                        role: role,
+                      );
                       if (ctx.mounted) Navigator.pop(ctx);
                       _load();
                     },

@@ -1,10 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
-import '../services/subscription_service.dart';
-import 'signup_screen.dart';
 import 'store_setup_screen.dart';
 import 'home_screen.dart';
-import 'subscription_wall_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -48,15 +45,7 @@ class _LoginScreenState extends State<LoginScreen> {
         return;
       }
 
-      // Check subscription
-      final sub = await SubscriptionService.check();
-      if (!mounted) return;
-
-      if (SubscriptionService.isActive) {
-        _goTo(const HomeScreen());
-      } else {
-        _goTo(const SubscriptionWallScreen());
-      }
+      _goTo(const HomeScreen());
     } catch (e) {
       setState(() {
         _loading = false;
@@ -72,10 +61,18 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   String _friendlyError(String msg) {
-    if (msg.contains('Invalid login')) return 'Invalid email or password.';
-    if (msg.contains('Email not confirmed')) return 'Check your email to confirm your account.';
-    if (msg.contains('network')) return 'No internet connection.';
-    return 'Login failed. Please try again.';
+    final lower = msg.toLowerCase();
+    if (lower.contains('invalid login') || lower.contains('invalid credentials')) {
+      return 'Invalid email or password.';
+    }
+    if (lower.contains('email not confirmed') || lower.contains('email_not_confirmed')) {
+      return 'Email not confirmed. Check your inbox or ask admin to confirm your account.';
+    }
+    if (lower.contains('network') || lower.contains('socket')) {
+      return 'No internet connection.';
+    }
+    // Show actual error for debugging
+    return 'Login failed: $msg';
   }
 
   Future<void> _forgotPassword() async {
@@ -191,18 +188,13 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                     ),
 
-                    const SizedBox(height: 16),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Text("Don't have an account?"),
-                        TextButton(
-                          onPressed: () => Navigator.of(context).push(
-                            MaterialPageRoute(builder: (_) => const SignupScreen()),
-                          ),
-                          child: const Text('Sign Up'),
-                        ),
-                      ],
+                    const SizedBox(height: 20),
+                    Text(
+                      'Contact admin for account access.',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: theme.colorScheme.onSurface.withOpacity(0.5),
+                      ),
                     ),
                   ],
                 ),
