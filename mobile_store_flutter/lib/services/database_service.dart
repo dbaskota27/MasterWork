@@ -4,6 +4,7 @@ import '../models/product.dart';
 import '../models/customer.dart';
 import '../models/invoice.dart';
 import 'auth_service.dart';
+import 'worker_service.dart';
 
 class DatabaseService {
   static SupabaseClient get _db => Supabase.instance.client;
@@ -113,6 +114,7 @@ class DatabaseService {
   }) async {
     final res = await _db.from('invoices').insert({
       'store_id':        _storeId,
+      'worker_name':     WorkerService.workerName,
       'customer_name':   customerName,
       'customer_phone':  customerPhone,
       'items':           items.map((e) => e.toJson()).toList(),

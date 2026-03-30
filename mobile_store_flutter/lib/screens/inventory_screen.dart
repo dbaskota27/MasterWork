@@ -3,7 +3,7 @@ import 'package:intl/intl.dart';
 import '../config.dart';
 import '../models/product.dart';
 import '../services/database_service.dart';
-import '../services/auth_service.dart';
+import '../services/worker_service.dart';
 
 class InventoryScreen extends StatefulWidget {
   const InventoryScreen({super.key});
@@ -85,7 +85,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
           ),
         ],
       ),
-      floatingActionButton: AuthService.isManager
+      floatingActionButton: WorkerService.isManager
           ? FloatingActionButton.extended(
               icon: const Icon(Icons.add),
               label: const Text('Add Product'),
@@ -145,7 +145,7 @@ class _ProductTile extends StatelessWidget {
           moneyFmt.format(product.price),
           style: const TextStyle(fontWeight: FontWeight.bold),
         ),
-        onTap: AuthService.isManager
+        onTap: WorkerService.isManager
             ? () => _showEditDialog(context)
             : null,
       ),

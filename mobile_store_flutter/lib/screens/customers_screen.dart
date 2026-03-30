@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/customer.dart';
 import '../services/database_service.dart';
-import '../services/auth_service.dart';
+import '../services/worker_service.dart';
 
 class CustomersScreen extends StatefulWidget {
   const CustomersScreen({super.key});
@@ -77,7 +77,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
           ),
         ],
       ),
-      floatingActionButton: AuthService.isManager
+      floatingActionButton: WorkerService.isManager
           ? FloatingActionButton.extended(
               icon: const Icon(Icons.person_add),
               label: const Text('Add Customer'),
@@ -131,7 +131,7 @@ class _CustomerTile extends StatelessWidget {
           if (customer.phone != null) customer.phone!,
           if (customer.email != null) customer.email!,
         ].join(' · ')),
-        onTap: AuthService.isManager
+        onTap: WorkerService.isManager
             ? () => _showEdit(context)
             : null,
       ),

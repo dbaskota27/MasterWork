@@ -3,7 +3,7 @@ import 'package:intl/intl.dart';
 import '../config.dart';
 import '../models/invoice.dart';
 import '../services/database_service.dart';
-import '../services/auth_service.dart';
+import '../services/worker_service.dart';
 import '../services/receipt_service.dart';
 
 class InvoicesScreen extends StatefulWidget {
@@ -53,7 +53,7 @@ class _InvoicesScreenState extends State<InvoicesScreen> {
               invoice: invoices[i],
               moneyFmt: _money,
               dateFmt: _dateFmt,
-              onDeleted: AuthService.isManager ? _reload : null,
+              onDeleted: WorkerService.isManager ? _reload : null,
             ),
           ),
         );
@@ -92,6 +92,9 @@ class _InvoiceTile extends StatelessWidget {
                       style: const TextStyle(fontWeight: FontWeight.bold)),
                   Text(dateFmt.format(invoice.createdAt),
                       style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                  if (invoice.workerName != null)
+                    Text(invoice.workerName!,
+                        style: TextStyle(fontSize: 11, color: Colors.blue.shade700)),
                 ],
               ),
               const SizedBox(width: 12),

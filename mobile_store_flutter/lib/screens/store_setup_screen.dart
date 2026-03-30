@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
+import '../services/worker_service.dart';
 import 'home_screen.dart';
 
 class StoreSetupScreen extends StatefulWidget {
@@ -10,12 +11,14 @@ class StoreSetupScreen extends StatefulWidget {
 }
 
 class _StoreSetupScreenState extends State<StoreSetupScreen> {
-  final _formKey      = GlobalKey<FormState>();
+  final _formKey        = GlobalKey<FormState>();
   final _storeNameCtrl  = TextEditingController();
   final _addressCtrl    = TextEditingController();
   final _phoneCtrl      = TextEditingController();
   final _emailCtrl      = TextEditingController();
   final _displayCtrl    = TextEditingController();
+  final _usernameCtrl   = TextEditingController();
+  final _passwordCtrl   = TextEditingController();
   bool _loading = false;
 
   @override
@@ -25,6 +28,8 @@ class _StoreSetupScreenState extends State<StoreSetupScreen> {
     _phoneCtrl.dispose();
     _emailCtrl.dispose();
     _displayCtrl.dispose();
+    _usernameCtrl.dispose();
+    _passwordCtrl.dispose();
     super.dispose();
   }
 
@@ -39,6 +44,14 @@ class _StoreSetupScreenState extends State<StoreSetupScreen> {
         phone:       _phoneCtrl.text.trim(),
         email:       _emailCtrl.text.trim(),
         displayName: _displayCtrl.text.trim(),
+        username:    _usernameCtrl.text.trim(),
+        password:    _passwordCtrl.text,
+      );
+
+      // Auto-login as the manager worker
+      await WorkerService.login(
+        _usernameCtrl.text.trim(),
+        _passwordCtrl.text,
       );
 
       if (!mounted) return;
@@ -84,19 +97,6 @@ class _StoreSetupScreenState extends State<StoreSetupScreen> {
                       const SizedBox(height: 24),
 
                       TextFormField(
-                        controller: _displayCtrl,
-                        decoration: const InputDecoration(
-                          labelText: 'Your Name *',
-                          prefixIcon: Icon(Icons.person_outline),
-                          hintText: 'How should we call you?',
-                        ),
-                        textCapitalization: TextCapitalization.words,
-                        validator: (v) =>
-                            v == null || v.trim().isEmpty ? 'Required' : null,
-                      ),
-                      const SizedBox(height: 14),
-
-                      TextFormField(
                         controller: _storeNameCtrl,
                         decoration: const InputDecoration(
                           labelText: 'Store Name *',
@@ -134,6 +134,50 @@ class _StoreSetupScreenState extends State<StoreSetupScreen> {
                           prefixIcon: Icon(Icons.email_outlined),
                         ),
                         keyboardType: TextInputType.emailAddress,
+                      ),
+
+                      const SizedBox(height: 20),
+                      const Divider(),
+                      const SizedBox(height: 8),
+                      Text('Your Manager Account',
+                          style: theme.textTheme.titleSmall),
+                      const SizedBox(height: 14),
+
+                      TextFormField(
+                        controller: _displayCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Your Name *',
+                          prefixIcon: Icon(Icons.person_outline),
+                        ),
+                        textCapitalization: TextCapitalization.words,
+                        validator: (v) =>
+                            v == null || v.trim().isEmpty ? 'Required' : null,
+                      ),
+                      const SizedBox(height: 14),
+
+                      TextFormField(
+                        controller: _usernameCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Username *',
+                          prefixIcon: Icon(Icons.alternate_email),
+                          hintText: 'e.g. admin',
+                        ),
+                        validator: (v) =>
+                            v == null || v.trim().isEmpty ? 'Required' : null,
+                      ),
+                      const SizedBox(height: 14),
+
+                      TextFormField(
+                        controller: _passwordCtrl,
+                        obscureText: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Password *',
+                          prefixIcon: Icon(Icons.lock_outline),
+                        ),
+                        validator: (v) {
+                          if (v == null || v.length < 4) return 'At least 4 characters';
+                          return null;
+                        },
                       ),
                       const SizedBox(height: 28),
 

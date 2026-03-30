@@ -26,6 +26,7 @@ class InvoiceItem {
 
 class Invoice {
   final int id;
+  final String? workerName;
   final String? customerName;
   final String? customerPhone;
   final List<InvoiceItem> items;
@@ -39,6 +40,7 @@ class Invoice {
 
   const Invoice({
     required this.id,
+    this.workerName,
     this.customerName,
     this.customerPhone,
     required this.items,
@@ -61,6 +63,7 @@ class Invoice {
     }
     return Invoice(
       id: j['id'] as int,
+      workerName: j['worker_name'] as String?,
       customerName: j['customer_name'] as String?,
       customerPhone: j['customer_phone'] as String?,
       items: items,

@@ -43,6 +43,11 @@ class ReceiptService {
           ),
           pw.Divider(),
 
+          // Served by
+          if (inv.workerName != null)
+            pw.Text('Served by: ${inv.workerName}',
+                style: const pw.TextStyle(fontSize: 9)),
+
           // Customer
           if (inv.customerName != null) ...[
             pw.Text('Customer: ${inv.customerName}',

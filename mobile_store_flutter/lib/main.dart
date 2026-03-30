@@ -3,8 +3,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'config.dart';
 import 'services/auth_service.dart';
 import 'screens/login_screen.dart';
-import 'screens/home_screen.dart';
 import 'screens/store_setup_screen.dart';
+import 'screens/worker_login_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -14,7 +14,6 @@ void main() async {
     anonKey: AppConfig.supabaseAnonKey,
   );
 
-  // Determine start screen — wrap in try/catch so the app always opens
   Widget startScreen;
 
   try {
@@ -25,10 +24,10 @@ void main() async {
     } else if (AuthService.storeId == null) {
       startScreen = const StoreSetupScreen();
     } else {
-      startScreen = const HomeScreen();
+      // Store authenticated — go to worker login
+      startScreen = const WorkerLoginScreen();
     }
   } catch (e) {
-    // If anything fails (network, DB, etc.), fall back to login
     startScreen = const LoginScreen();
   }
 

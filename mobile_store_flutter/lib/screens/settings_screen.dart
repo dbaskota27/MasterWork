@@ -5,8 +5,10 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:intl/intl.dart';
 import '../services/auth_service.dart';
+import '../services/worker_service.dart';
 import '../services/database_service.dart';
 import 'login_screen.dart';
+import 'worker_login_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -22,7 +24,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       padding: const EdgeInsets.all(16),
       children: [
         // Store Info (manager)
-        if (AuthService.isManager)
+        if (WorkerService.isManager)
           _SectionTile(
             icon: Icons.storefront_outlined,
             title: 'Store Information',
@@ -41,7 +43,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         const SizedBox(height: 8),
 
         // User Management (manager)
-        if (AuthService.isManager) ...[
+        if (WorkerService.isManager) ...[
           _SectionTile(
             icon: Icons.manage_accounts_outlined,
             title: 'User Management',
@@ -78,7 +80,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         const SizedBox(height: 8),
         Center(
           child: Text(
-            'Signed in as ${AuthService.userEmail ?? ""}',
+            'Signed in as ${WorkerService.workerName ?? AuthService.userEmail ?? ""}',
             style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
           ),
         ),
@@ -150,6 +152,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _logout(BuildContext ctx) async {
+    WorkerService.logout();
     await AuthService.logout();
     if (!ctx.mounted) return;
     Navigator.of(ctx).pushAndRemoveUntil(
@@ -339,7 +342,9 @@ class _ChangePasswordScreenState extends State<_ChangePasswordScreen> {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _saving = true);
     try {
-      await AuthService.changePassword(_newCtrl.text);
+      final wid = WorkerService.workerId;
+      if (wid == null) throw Exception('No worker logged in');
+      await WorkerService.changePassword(wid, _newCtrl.text);
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('Password changed!')));
@@ -424,12 +429,12 @@ class _UserManagementScreenState extends State<_UserManagementScreen> {
   }
 
   Future<void> _load() async {
-    final users = await AuthService.getStoreUsers();
+    final users = await WorkerService.listWorkers();
     setState(() { _users = users; _loading = false; });
   }
 
-  Future<void> _delete(String id, String displayName) async {
-    if (id == AuthService.userId) {
+  Future<void> _delete(int id, String name) async {
+    if (id == WorkerService.workerId) {
       ScaffoldMessenger.of(context)
           .showSnackBar(const SnackBar(content: Text("Can't delete yourself.")));
       return;
@@ -437,7 +442,7 @@ class _UserManagementScreenState extends State<_UserManagementScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        title: Text('Remove "$displayName"?'),
+        title: Text('Remove "$name"?'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
           FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Remove')),
@@ -445,7 +450,7 @@ class _UserManagementScreenState extends State<_UserManagementScreen> {
       ),
     );
     if (ok != true) return;
-    await AuthService.deleteStoreUser(id);
+    await WorkerService.deleteWorker(id);
     _load();
   }
 
@@ -465,7 +470,9 @@ class _UserManagementScreenState extends State<_UserManagementScreen> {
                     final u = _users[i];
                     final role = u['role'] ?? 'worker';
                     final name = u['display_name'] ?? 'Unknown';
-                    final isMe = u['user_id'] == AuthService.userId;
+                    final username = u['username'] ?? '';
+                    final id = (u['id'] as num).toInt();
+                    final isMe = id == WorkerService.workerId;
 
                     return Card(
                       child: ListTile(
@@ -495,35 +502,40 @@ class _UserManagementScreenState extends State<_UserManagementScreen> {
                             ),
                           ],
                         ]),
-                        subtitle: Text(role),
-                        trailing: !isMe
-                            ? Row(mainAxisSize: MainAxisSize.min, children: [
-                                IconButton(
-                                  icon: const Icon(Icons.edit_outlined),
-                                  onPressed: () => _showEditDialog(u),
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.delete_outline, color: Colors.red),
-                                  onPressed: () => _delete(u['id'], name),
-                                ),
-                              ])
-                            : null,
+                        subtitle: Text('@$username · $role'),
+                        trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                          IconButton(
+                            icon: const Icon(Icons.key_outlined),
+                            tooltip: 'Reset Password',
+                            onPressed: () => _showPasswordDialog(id, name),
+                          ),
+                          if (!isMe) ...[
+                            IconButton(
+                              icon: const Icon(Icons.edit_outlined),
+                              onPressed: () => _showEditDialog(u),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.delete_outline, color: Colors.red),
+                              onPressed: () => _delete(id, name),
+                            ),
+                          ],
+                        ]),
                       ),
                     );
                   },
                 ),
       floatingActionButton: FloatingActionButton.extended(
         icon: const Icon(Icons.person_add),
-        label: const Text('Add User'),
+        label: const Text('Add Worker'),
         onPressed: _showAddDialog,
       ),
     );
   }
 
   void _showAddDialog() {
-    final nameCtrl  = TextEditingController();
-    final emailCtrl = TextEditingController();
-    final passCtrl  = TextEditingController();
+    final nameCtrl     = TextEditingController();
+    final usernameCtrl = TextEditingController();
+    final passCtrl     = TextEditingController();
     String role = 'worker';
     bool saving = false;
     String? error;
@@ -541,11 +553,6 @@ class _UserManagementScreenState extends State<_UserManagementScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text('Add Worker', style: Theme.of(ctx).textTheme.titleLarge),
-              const SizedBox(height: 8),
-              const Text(
-                'Create a login account for your worker.',
-                style: TextStyle(fontSize: 12, color: Colors.grey),
-              ),
               const SizedBox(height: 16),
               TextField(
                 controller: nameCtrl,
@@ -554,9 +561,11 @@ class _UserManagementScreenState extends State<_UserManagementScreen> {
               ),
               const SizedBox(height: 12),
               TextField(
-                controller: emailCtrl,
-                decoration: const InputDecoration(labelText: 'Email *'),
-                keyboardType: TextInputType.emailAddress,
+                controller: usernameCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Username *',
+                  hintText: 'e.g. ram, worker1',
+                ),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -601,15 +610,15 @@ class _UserManagementScreenState extends State<_UserManagementScreen> {
                   child: FilledButton(
                     onPressed: saving ? null : () async {
                       if (nameCtrl.text.trim().isEmpty ||
-                          emailCtrl.text.trim().isEmpty ||
-                          passCtrl.text.length < 6) {
-                        setSheetState(() => error = 'Fill all fields. Password min 6 chars.');
+                          usernameCtrl.text.trim().isEmpty ||
+                          passCtrl.text.length < 4) {
+                        setSheetState(() => error = 'Fill all fields. Password min 4 chars.');
                         return;
                       }
                       setSheetState(() { saving = true; error = null; });
                       try {
-                        await AuthService.createWorker(
-                          email: emailCtrl.text.trim(),
+                        await WorkerService.createWorker(
+                          username: usernameCtrl.text.trim(),
                           password: passCtrl.text,
                           displayName: nameCtrl.text.trim(),
                           role: role,
@@ -626,7 +635,7 @@ class _UserManagementScreenState extends State<_UserManagementScreen> {
                     child: saving
                         ? const SizedBox(height: 20, width: 20,
                             child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                        : const Text('Create Account'),
+                        : const Text('Create'),
                   ),
                 ),
               ]),
@@ -641,6 +650,7 @@ class _UserManagementScreenState extends State<_UserManagementScreen> {
   void _showEditDialog(Map<String, dynamic> user) {
     final nameCtrl = TextEditingController(text: user['display_name'] ?? '');
     String role = user['role'] ?? 'worker';
+    final id = (user['id'] as num).toInt();
 
     showModalBottomSheet(
       context: context,
@@ -693,8 +703,7 @@ class _UserManagementScreenState extends State<_UserManagementScreen> {
                 Expanded(
                   child: FilledButton(
                     onPressed: () async {
-                      await AuthService.updateStoreUser(
-                        user['id'],
+                      await WorkerService.updateWorker(id,
                         displayName: nameCtrl.text.trim(),
                         role: role,
                       );
@@ -708,6 +717,65 @@ class _UserManagementScreenState extends State<_UserManagementScreen> {
               const SizedBox(height: 20),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  void _showPasswordDialog(int id, String name) {
+    final passCtrl = TextEditingController();
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(ctx).viewInsets.bottom,
+          left: 20, right: 20, top: 20,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Reset Password', style: Theme.of(ctx).textTheme.titleLarge),
+            const SizedBox(height: 4),
+            Text('For: $name', style: const TextStyle(color: Colors.grey)),
+            const SizedBox(height: 16),
+            TextField(
+              controller: passCtrl,
+              decoration: const InputDecoration(labelText: 'New Password *'),
+              obscureText: true,
+            ),
+            const SizedBox(height: 16),
+            Row(children: [
+              Expanded(
+                child: OutlinedButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('Cancel')),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: FilledButton(
+                  onPressed: () async {
+                    if (passCtrl.text.length < 4) {
+                      ScaffoldMessenger.of(ctx).showSnackBar(
+                        const SnackBar(content: Text('Min 4 characters')),
+                      );
+                      return;
+                    }
+                    await WorkerService.changePassword(id, passCtrl.text);
+                    if (ctx.mounted) {
+                      Navigator.pop(ctx);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Password reset for $name')),
+                      );
+                    }
+                  },
+                  child: const Text('Reset'),
+                ),
+              ),
+            ]),
+            const SizedBox(height: 20),
+          ],
         ),
       ),
     );

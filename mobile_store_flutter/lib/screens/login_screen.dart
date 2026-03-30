@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 import 'store_setup_screen.dart';
-import 'home_screen.dart';
+import 'worker_login_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -45,7 +45,7 @@ class _LoginScreenState extends State<LoginScreen> {
         return;
       }
 
-      _goTo(const HomeScreen());
+      _goTo(const WorkerLoginScreen());
     } catch (e) {
       setState(() {
         _loading = false;
