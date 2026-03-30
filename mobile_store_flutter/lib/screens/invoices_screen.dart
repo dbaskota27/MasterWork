@@ -244,6 +244,13 @@ class _InvoiceDetail extends StatelessWidget {
               _row('Change Given', moneyFmt.format(invoice.change),
                   bold: true),
 
+            if (invoice.pointsRedeemed > 0)
+              _row('Points Redeemed', '${invoice.pointsRedeemed.toStringAsFixed(0)} pts',
+                  valueColor: Colors.amber.shade700),
+            if (invoice.pointsEarned > 0)
+              _row('Points Earned', '+${invoice.pointsEarned.toStringAsFixed(0)} pts',
+                  valueColor: Colors.blue.shade700),
+
             const SizedBox(height: 8),
             _row('Payment',
                 invoice.paymentType == 'cash' ? 'Cash' : 'QuickPay'),

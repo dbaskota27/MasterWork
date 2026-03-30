@@ -102,6 +102,7 @@ class DatabaseService {
   }
 
   static Future<Invoice> createInvoice({
+    int? customerId,
     String? customerName,
     String? customerPhone,
     required List<InvoiceItem> items,
@@ -111,10 +112,13 @@ class DatabaseService {
     required double amountReceived,
     required double change,
     required String paymentType,
+    double pointsEarned = 0,
+    double pointsRedeemed = 0,
   }) async {
     final res = await _db.from('invoices').insert({
       'store_id':        _storeId,
       'worker_name':     WorkerService.workerName,
+      'customer_id':     customerId,
       'customer_name':   customerName,
       'customer_phone':  customerPhone,
       'items':           items.map((e) => e.toJson()).toList(),
@@ -124,8 +128,34 @@ class DatabaseService {
       'amount_received': amountReceived,
       'change_given':    change,
       'payment_type':    paymentType,
+      'points_earned':   pointsEarned,
+      'points_redeemed': pointsRedeemed,
     }).select().single();
     return Invoice.fromJson(res);
+  }
+
+  /// Add points to a customer's balance.
+  static Future<void> addPoints(int customerId, double points) async {
+    final res = await _db.from('customers').select('points_balance').eq('id', customerId).single();
+    final current = (res['points_balance'] as num).toDouble();
+    await _db.from('customers').update({'points_balance': current + points}).eq('id', customerId);
+  }
+
+  /// Deduct points from a customer's balance.
+  static Future<void> deductPoints(int customerId, double points) async {
+    final res = await _db.from('customers').select('points_balance').eq('id', customerId).single();
+    final current = (res['points_balance'] as num).toDouble();
+    final newBal = (current - points).clamp(0, double.infinity);
+    await _db.from('customers').update({'points_balance': newBal}).eq('id', customerId);
+  }
+
+  /// Get store's points configuration.
+  static Future<Map<String, double>> getPointsConfig() async {
+    final info = await getStoreInfo();
+    return {
+      'points_per_unit': (info['points_per_unit'] as num?)?.toDouble() ?? 1,
+      'points_value': (info['points_value'] as num?)?.toDouble() ?? 0.01,
+    };
   }
 
   static Future<void> deleteInvoice(int id) async {

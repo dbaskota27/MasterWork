@@ -130,6 +130,7 @@ class _CustomerTile extends StatelessWidget {
         subtitle: Text([
           if (customer.phone != null) customer.phone!,
           if (customer.email != null) customer.email!,
+          '${customer.pointsBalance.toStringAsFixed(0)} pts',
         ].join(' · ')),
         onTap: WorkerService.isManager
             ? () => _showEdit(context)

@@ -201,13 +201,15 @@ class _StoreInfoScreen extends StatefulWidget {
 
 class _StoreInfoScreenState extends State<_StoreInfoScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _name      = TextEditingController();
-  final _address   = TextEditingController();
-  final _phone     = TextEditingController();
-  final _email     = TextEditingController();
-  final _paymentQr = TextEditingController();
-  final _currency  = TextEditingController();
-  final _taxRate   = TextEditingController();
+  final _name         = TextEditingController();
+  final _address      = TextEditingController();
+  final _phone        = TextEditingController();
+  final _email        = TextEditingController();
+  final _paymentQr    = TextEditingController();
+  final _currency     = TextEditingController();
+  final _taxRate      = TextEditingController();
+  final _pointsPerUnit = TextEditingController();
+  final _pointsValue   = TextEditingController();
   bool _loading = true, _saving = false;
 
   @override
@@ -226,13 +228,15 @@ class _StoreInfoScreenState extends State<_StoreInfoScreen> {
       _paymentQr.text = info['payment_qr'] ?? '';
       _currency.text  = info['currency'] ?? '\$';
       _taxRate.text   = (info['tax_rate'] ?? 0).toString();
+      _pointsPerUnit.text = (info['points_per_unit'] ?? 1).toString();
+      _pointsValue.text   = (info['points_value'] ?? 0.01).toString();
     } catch (_) {}
     setState(() => _loading = false);
   }
 
   @override
   void dispose() {
-    for (final c in [_name, _address, _phone, _email, _paymentQr, _currency, _taxRate]) {
+    for (final c in [_name, _address, _phone, _email, _paymentQr, _currency, _taxRate, _pointsPerUnit, _pointsValue]) {
       c.dispose();
     }
     super.dispose();
@@ -249,7 +253,9 @@ class _StoreInfoScreenState extends State<_StoreInfoScreen> {
         'email':      _email.text.trim(),
         'payment_qr': _paymentQr.text.trim(),
         'currency':   _currency.text.trim().isEmpty ? '\$' : _currency.text.trim(),
-        'tax_rate':   double.tryParse(_taxRate.text) ?? 0,
+        'tax_rate':       double.tryParse(_taxRate.text) ?? 0,
+        'points_per_unit': double.tryParse(_pointsPerUnit.text) ?? 1,
+        'points_value':    double.tryParse(_pointsValue.text) ?? 0.01,
       });
       if (mounted) {
         ScaffoldMessenger.of(context)
@@ -284,6 +290,13 @@ class _StoreInfoScreenState extends State<_StoreInfoScreen> {
                   _f(_currency, 'Currency Symbol', hint: '\$'),
                   _f(_taxRate, 'Tax Rate (0.08 = 8%)',
                       type: const TextInputType.numberWithOptions(decimal: true)),
+                  const SizedBox(height: 8),
+                  Text('Loyalty Points', style: Theme.of(context).textTheme.titleSmall),
+                  const SizedBox(height: 8),
+                  _f(_pointsPerUnit, 'Points earned per \$1 spent',
+                      hint: '1', type: const TextInputType.numberWithOptions(decimal: true)),
+                  _f(_pointsValue, 'Value of 1 point in \$',
+                      hint: '0.01', type: const TextInputType.numberWithOptions(decimal: true)),
                   const SizedBox(height: 24),
                   SizedBox(
                     width: double.infinity,

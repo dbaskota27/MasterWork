@@ -3,6 +3,7 @@ class Customer {
   final String name;
   final String? phone;
   final String? email;
+  final double pointsBalance;
   final DateTime? createdAt;
 
   const Customer({
@@ -10,6 +11,7 @@ class Customer {
     required this.name,
     this.phone,
     this.email,
+    this.pointsBalance = 0,
     this.createdAt,
   });
 
@@ -18,6 +20,7 @@ class Customer {
         name: j['name'] as String,
         phone: j['phone'] as String?,
         email: j['email'] as String?,
+        pointsBalance: (j['points_balance'] as num?)?.toDouble() ?? 0,
         createdAt: j['created_at'] != null
             ? DateTime.tryParse(j['created_at'] as String)
             : null,

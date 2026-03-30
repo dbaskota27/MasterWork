@@ -27,6 +27,7 @@ class InvoiceItem {
 class Invoice {
   final int id;
   final String? workerName;
+  final int? customerId;
   final String? customerName;
   final String? customerPhone;
   final List<InvoiceItem> items;
@@ -35,12 +36,15 @@ class Invoice {
   final double customerPays;
   final double amountReceived;
   final double change;
-  final String paymentType; // 'cash' | 'quickpay'
+  final String paymentType;
+  final double pointsEarned;
+  final double pointsRedeemed;
   final DateTime createdAt;
 
   const Invoice({
     required this.id,
     this.workerName,
+    this.customerId,
     this.customerName,
     this.customerPhone,
     required this.items,
@@ -50,6 +54,8 @@ class Invoice {
     required this.amountReceived,
     required this.change,
     required this.paymentType,
+    this.pointsEarned = 0,
+    this.pointsRedeemed = 0,
     required this.createdAt,
   });
 
@@ -64,6 +70,7 @@ class Invoice {
     return Invoice(
       id: j['id'] as int,
       workerName: j['worker_name'] as String?,
+      customerId: j['customer_id'] as int?,
       customerName: j['customer_name'] as String?,
       customerPhone: j['customer_phone'] as String?,
       items: items,
@@ -73,6 +80,8 @@ class Invoice {
       amountReceived: (j['amount_received'] as num?)?.toDouble() ?? 0,
       change: (j['change_given'] as num?)?.toDouble() ?? 0,
       paymentType: j['payment_type'] as String? ?? 'cash',
+      pointsEarned: (j['points_earned'] as num?)?.toDouble() ?? 0,
+      pointsRedeemed: (j['points_redeemed'] as num?)?.toDouble() ?? 0,
       createdAt: DateTime.parse(j['created_at'] as String),
     );
   }

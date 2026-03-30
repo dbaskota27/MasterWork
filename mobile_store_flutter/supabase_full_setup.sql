@@ -41,6 +41,8 @@ CREATE TABLE stores (
   currency            text DEFAULT '$',
   tax_rate            numeric DEFAULT 0,
   payment_qr          text DEFAULT '',
+  points_per_unit     numeric DEFAULT 1,
+  points_value        numeric DEFAULT 0.01,
   subscription_status text DEFAULT 'active' CHECK (subscription_status IN ('trial', 'active', 'expired', 'suspended')),
   subscription_expiry timestamptz,
   created_at          timestamptz DEFAULT now()
@@ -83,18 +85,22 @@ CREATE TABLE products (
 CREATE TABLE customers (
   id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   store_id   uuid NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
-  name       text NOT NULL,
-  phone      text,
-  email      text,
-  created_at timestamptz DEFAULT now()
+  name            text NOT NULL,
+  phone           text,
+  email           text,
+  points_balance  numeric NOT NULL DEFAULT 0,
+  created_at      timestamptz DEFAULT now()
 );
 
 CREATE TABLE invoices (
   id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   store_id        uuid NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
-  worker_name     text,
-  customer_name   text,
-  customer_phone  text,
+  worker_name      text,
+  customer_id      bigint REFERENCES customers(id) ON DELETE SET NULL,
+  customer_name    text,
+  customer_phone   text,
+  points_earned    numeric NOT NULL DEFAULT 0,
+  points_redeemed  numeric NOT NULL DEFAULT 0,
   items           jsonb NOT NULL DEFAULT '[]',
   marked_price    numeric NOT NULL DEFAULT 0,
   discount        numeric NOT NULL DEFAULT 0,

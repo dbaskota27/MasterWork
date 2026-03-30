@@ -85,6 +85,18 @@ class ReceiptService {
           if (inv.change > 0)
             _totalRow(money, 'Change Given', inv.change, bold: true),
 
+          if (inv.pointsRedeemed > 0)
+            _totalRow(money, 'Points Redeemed', -inv.pointsRedeemed,
+                color: PdfColors.amber),
+          if (inv.pointsEarned > 0)
+            pw.Padding(
+              padding: const pw.EdgeInsets.only(top: 4),
+              child: pw.Text(
+                'Points Earned: +${inv.pointsEarned.toStringAsFixed(0)}',
+                style: pw.TextStyle(fontSize: 9, color: PdfColors.blue700),
+              ),
+            ),
+
           pw.SizedBox(height: 6),
           pw.Center(
             child: pw.Text(
