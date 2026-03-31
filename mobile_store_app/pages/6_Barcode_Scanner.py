@@ -115,23 +115,69 @@ if st.session_state.scanner_step == "scan":
                 product = db.get_product_by_barcode(value)
 
                 if not product:
-                    st.warning(f"No product found with barcode `{value}`.")
-                    ca, cb = st.columns(2)
-                    if ca.button("➕ Add to Inventory", type="primary", use_container_width=True):
-                        st.session_state.add_scanned_barcode = value
-                        st.switch_page("pages/1_Inventory.py")
-                    cb.info("Register this product in Inventory first, then scan again.")
+                    st.error(f"No stock found for barcode `{value}`.")
+                    st.subheader("➕ Add New Product")
+                    categories = db.get_categories()
+                    with st.form("add_from_scan"):
+                        c1, c2 = st.columns(2)
+                        new_name  = c1.text_input("Product Name *")
+                        new_brand = c2.text_input("Brand")
+                        c3, c4 = st.columns(2)
+                        new_model   = c3.text_input("Model")
+                        new_barcode = c4.text_input("Barcode", value=value, disabled=True)
+                        if categories:
+                            cat_opts = {c["id"]: c["name"] for c in categories}
+                            new_cat = st.selectbox("Category", options=list(cat_opts.keys()),
+                                                   format_func=lambda x: cat_opts[x])
+                        else:
+                            new_cat = None
+                        c5, c6, c7, c8 = st.columns(4)
+                        new_cost  = c5.number_input("Cost Price *", min_value=0.0, step=0.01)
+                        new_sell  = c6.number_input("Sell Price *", min_value=0.0, step=0.01)
+                        new_stock = c7.number_input("Stock Qty", min_value=0, step=1, value=qty)
+                        new_min   = c8.number_input("Min Stock Alert", min_value=0, step=1, value=5)
+                        new_desc  = st.text_area("Description / Notes")
+                        submitted = st.form_submit_button("➕ Add Product", use_container_width=True, type="primary")
+                        if submitted:
+                            if not new_name:
+                                st.error("Product name is required!")
+                            elif new_sell <= 0:
+                                st.error("Sell price must be greater than 0.")
+                            else:
+                                db.add_product({
+                                    "name": new_name, "brand": new_brand, "model": new_model,
+                                    "barcode": value, "category_id": new_cat,
+                                    "cost_price": new_cost, "sell_price": new_sell,
+                                    "stock_qty": new_stock, "min_stock": new_min,
+                                    "description": new_desc,
+                                })
+                                st.success(f"'{new_name}' added with {new_stock} units!")
+                                st.session_state.show_camera = False
+                                st.rerun()
 
                 elif "📥" in mode:
-                    # Stock In: simple confirm, no customer needed
-                    current = int(product.get("stock_qty") or 0)
+                    # Stock In: show product card + editable fields
+                    current    = int(product.get("stock_qty") or 0)
                     _product_card(product)
-                    st.write(f"Add **{qty}** unit(s) → new stock: **{current + qty}**")
-                    if st.button("✅ Confirm Stock In", type="primary", use_container_width=True):
-                        db.add_stock(product["id"], qty)
-                        st.success(f"Done! Stock: {current} → {current + qty}")
-                        st.session_state.show_camera = False
-                        st.rerun()
+                    st.subheader("Update Stock & Prices")
+                    with st.form("stock_in_form"):
+                        c1, c2, c3 = st.columns(3)
+                        new_qty    = c1.number_input("Add Qty", min_value=1, value=qty, step=1)
+                        cost_price = c2.number_input("Cost Price", value=float(product.get("cost_price") or 0), min_value=0.0, step=0.01)
+                        sell_price = c3.number_input("Sell Price", value=float(product.get("sell_price") or 0), min_value=0.0, step=0.01)
+                        confirm = st.form_submit_button("✅ Confirm Stock In", use_container_width=True, type="primary")
+                        if confirm:
+                            update_data = {}
+                            if cost_price != float(product.get("cost_price") or 0):
+                                update_data["cost_price"] = cost_price
+                            if sell_price != float(product.get("sell_price") or 0):
+                                update_data["sell_price"] = sell_price
+                            if update_data:
+                                db.update_product(product["id"], update_data)
+                            db.add_stock(product["id"], new_qty)
+                            st.success(f"Done! Stock: {current} → {current + new_qty}")
+                            st.session_state.show_camera = False
+                            st.rerun()
 
                 else:
                     # Stock Out: proceed to checkout
@@ -160,13 +206,64 @@ if st.session_state.scanner_step == "scan":
             if not manual_code:
                 st.warning("Enter a barcode first.")
             else:
-                product = db.get_product_by_barcode(manual_code.strip())
+                barcode_val = manual_code.strip()
+                product = db.get_product_by_barcode(barcode_val)
                 if not product:
-                    st.error(f"No product found with barcode `{manual_code.strip()}`.")
+                    st.error(f"No stock found for barcode `{barcode_val}`.")
+                    st.info("Add this product below:")
+                    categories = db.get_categories()
+                    with st.form("manual_add_product"):
+                        mc1, mc2 = st.columns(2)
+                        mn_name  = mc1.text_input("Product Name *", key="m_name")
+                        mn_brand = mc2.text_input("Brand", key="m_brand")
+                        mc3, mc4 = st.columns(2)
+                        mn_model   = mc3.text_input("Model", key="m_model")
+                        mc4.text_input("Barcode", value=barcode_val, disabled=True, key="m_bc_show")
+                        if categories:
+                            cat_opts = {c["id"]: c["name"] for c in categories}
+                            mn_cat = st.selectbox("Category", options=list(cat_opts.keys()),
+                                                  format_func=lambda x: cat_opts[x], key="m_cat")
+                        else:
+                            mn_cat = None
+                        mc5, mc6, mc7, mc8 = st.columns(4)
+                        mn_cost  = mc5.number_input("Cost Price *", min_value=0.0, step=0.01, key="m_cost")
+                        mn_sell  = mc6.number_input("Sell Price *", min_value=0.0, step=0.01, key="m_sell")
+                        mn_stock = mc7.number_input("Stock Qty", min_value=0, step=1, value=manual_qty, key="m_stk")
+                        mn_min   = mc8.number_input("Min Stock", min_value=0, step=1, value=5, key="m_min")
+                        mn_desc  = st.text_area("Description", key="m_desc")
+                        if st.form_submit_button("➕ Add Product", use_container_width=True, type="primary"):
+                            if not mn_name:
+                                st.error("Product name is required!")
+                            elif mn_sell <= 0:
+                                st.error("Sell price must be greater than 0.")
+                            else:
+                                db.add_product({
+                                    "name": mn_name, "brand": mn_brand, "model": mn_model,
+                                    "barcode": barcode_val, "category_id": mn_cat,
+                                    "cost_price": mn_cost, "sell_price": mn_sell,
+                                    "stock_qty": mn_stock, "min_stock": mn_min,
+                                    "description": mn_desc,
+                                })
+                                st.success(f"'{mn_name}' added with {mn_stock} units!")
+                                st.rerun()
                 elif "📥" in manual_mode:
                     current = int(product.get("stock_qty") or 0)
-                    db.add_stock(product["id"], manual_qty)
-                    st.success(f"**{product['name']}** stock: {current} → {current + manual_qty}")
+                    _product_card(product)
+                    with st.form("manual_stock_in"):
+                        mc1, mc2, mc3 = st.columns(3)
+                        m_qty   = mc1.number_input("Add Qty", min_value=1, value=manual_qty, step=1, key="msi_qty")
+                        m_cost  = mc2.number_input("Cost Price", value=float(product.get("cost_price") or 0), min_value=0.0, step=0.01, key="msi_cost")
+                        m_sell  = mc3.number_input("Sell Price", value=float(product.get("sell_price") or 0), min_value=0.0, step=0.01, key="msi_sell")
+                        if st.form_submit_button("✅ Confirm Stock In", use_container_width=True, type="primary"):
+                            update_data = {}
+                            if m_cost != float(product.get("cost_price") or 0):
+                                update_data["cost_price"] = m_cost
+                            if m_sell != float(product.get("sell_price") or 0):
+                                update_data["sell_price"] = m_sell
+                            if update_data:
+                                db.update_product(product["id"], update_data)
+                            db.add_stock(product["id"], m_qty)
+                            st.success(f"**{product['name']}** stock: {current} → {current + m_qty}")
                 else:
                     st.session_state.scanner_product = product
                     st.session_state.scanner_barcode = manual_code.strip()
