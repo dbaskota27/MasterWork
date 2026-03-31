@@ -38,7 +38,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
             child: TextField(
               decoration: const InputDecoration(
-                hintText: 'Search inventory…',
+                hintText: 'Search inventory...',
                 prefixIcon: Icon(Icons.search),
                 isDense: true,
               ),
@@ -123,7 +123,7 @@ class _ProductTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final lowStock = product.stock <= 5;
+    final lowStock = product.stock <= product.lowStockThreshold;
 
     return Card(
       child: ListTile(
@@ -162,7 +162,9 @@ class _ProductTile extends StatelessWidget {
           await DatabaseService.updateProduct(product.id, {
             'name': p.name,
             'price': p.price,
+            'cost_price': p.costPrice,
             'stock': p.stock,
+            'low_stock_threshold': p.lowStockThreshold,
             'barcode': p.barcode,
             'category': p.category,
           });
@@ -194,7 +196,9 @@ class _ProductFormState extends State<_ProductForm> {
   final _formKey = GlobalKey<FormState>();
   late TextEditingController _name;
   late TextEditingController _price;
+  late TextEditingController _costPrice;
   late TextEditingController _stock;
+  late TextEditingController _lowStockThreshold;
   late TextEditingController _barcode;
   late TextEditingController _category;
   bool _saving = false;
@@ -206,7 +210,11 @@ class _ProductFormState extends State<_ProductForm> {
     _name = TextEditingController(text: p?.name ?? '');
     _price =
         TextEditingController(text: p != null ? p.price.toStringAsFixed(2) : '');
+    _costPrice =
+        TextEditingController(text: p != null ? p.costPrice.toStringAsFixed(2) : '0.00');
     _stock = TextEditingController(text: p != null ? '${p.stock}' : '0');
+    _lowStockThreshold = TextEditingController(
+        text: p != null ? '${p.lowStockThreshold}' : '5');
     _barcode = TextEditingController(text: p?.barcode ?? '');
     _category = TextEditingController(text: p?.category ?? '');
   }
@@ -215,7 +223,9 @@ class _ProductFormState extends State<_ProductForm> {
   void dispose() {
     _name.dispose();
     _price.dispose();
+    _costPrice.dispose();
     _stock.dispose();
+    _lowStockThreshold.dispose();
     _barcode.dispose();
     _category.dispose();
     super.dispose();
@@ -228,7 +238,9 @@ class _ProductFormState extends State<_ProductForm> {
       id: widget.existing?.id ?? 0,
       name: _name.text.trim(),
       price: double.parse(_price.text),
+      costPrice: double.tryParse(_costPrice.text) ?? 0,
       stock: int.parse(_stock.text),
+      lowStockThreshold: int.tryParse(_lowStockThreshold.text) ?? 5,
       barcode: _barcode.text.trim().isEmpty ? null : _barcode.text.trim(),
       category:
           _category.text.trim().isEmpty ? null : _category.text.trim(),
@@ -275,7 +287,7 @@ class _ProductFormState extends State<_ProductForm> {
                   child: TextFormField(
                     controller: _price,
                     decoration:
-                        const InputDecoration(labelText: 'Price *'),
+                        const InputDecoration(labelText: 'Sell Price *'),
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),
                     validator: (v) {
@@ -288,12 +300,33 @@ class _ProductFormState extends State<_ProductForm> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: TextFormField(
+                    controller: _costPrice,
+                    decoration:
+                        const InputDecoration(labelText: 'Cost Price'),
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                  ),
+                ),
+              ]),
+              const SizedBox(height: 10),
+              Row(children: [
+                Expanded(
+                  child: TextFormField(
                     controller: _stock,
                     decoration:
                         const InputDecoration(labelText: 'Stock'),
                     keyboardType: TextInputType.number,
                     validator: (v) =>
                         int.tryParse(v ?? '') == null ? 'Invalid' : null,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: TextFormField(
+                    controller: _lowStockThreshold,
+                    decoration:
+                        const InputDecoration(labelText: 'Low Stock Alert'),
+                    keyboardType: TextInputType.number,
                   ),
                 ),
               ]),

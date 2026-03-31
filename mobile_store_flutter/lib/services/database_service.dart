@@ -3,6 +3,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/product.dart';
 import '../models/customer.dart';
 import '../models/invoice.dart';
+import '../models/expense.dart';
+import '../models/refund.dart';
+import '../models/cash_register.dart';
 import 'auth_service.dart';
 import 'worker_service.dart';
 
@@ -63,6 +66,11 @@ class DatabaseService {
         .update({'stock': current + delta}).eq('id', productId);
   }
 
+  static Future<List<Product>> getLowStockProducts() async {
+    final products = await getProducts();
+    return products.where((p) => p.stock <= p.lowStockThreshold).toList();
+  }
+
   // ── Customers ─────────────────────────────────────────────────────────────
 
   static Future<List<Customer>> getCustomers() async {
@@ -114,6 +122,7 @@ class DatabaseService {
     required String paymentType,
     double pointsEarned = 0,
     double pointsRedeemed = 0,
+    String status = 'completed',
   }) async {
     final res = await _db.from('invoices').insert({
       'store_id':        _storeId,
@@ -130,6 +139,7 @@ class DatabaseService {
       'payment_type':    paymentType,
       'points_earned':   pointsEarned,
       'points_redeemed': pointsRedeemed,
+      'status':          status,
     }).select().single();
     return Invoice.fromJson(res);
   }
@@ -162,6 +172,10 @@ class DatabaseService {
     await _db.from('invoices').delete().eq('id', id);
   }
 
+  static Future<void> updateInvoiceStatus(int id, String status) async {
+    await _db.from('invoices').update({'status': status}).eq('id', id);
+  }
+
   // ── Reports ───────────────────────────────────────────────────────────────
 
   static Future<Map<String, dynamic>> getSummary({
@@ -177,6 +191,7 @@ class DatabaseService {
 
     double totalRevenue = 0;
     double totalDiscount = 0;
+    double totalCost = 0;
     Map<String, int> productCounts = {};
 
     for (final inv in invoices) {
@@ -185,12 +200,17 @@ class DatabaseService {
       for (final item in inv.items) {
         productCounts[item.productName] =
             (productCounts[item.productName] ?? 0) + item.qty;
+        totalCost += item.costPrice * item.qty;
       }
     }
+
+    final totalProfit = totalRevenue - totalCost;
 
     return {
       'total_revenue': totalRevenue,
       'total_discount': totalDiscount,
+      'total_cost': totalCost,
+      'total_profit': totalProfit,
       'total_transactions': invoices.length,
       'invoices': invoices,
       'product_counts': productCounts,
@@ -212,6 +232,177 @@ class DatabaseService {
     await _db.from('stores').update(data).eq('id', _storeId);
   }
 
+  // ── Expenses ──────────────────────────────────────────────────────────────
+
+  static Future<List<Expense>> getExpenses({DateTime? from, DateTime? to}) async {
+    var query = _db.from('expenses').select().eq('store_id', _storeId);
+    if (from != null) query = query.gte('date', from.toIso8601String().split('T').first);
+    if (to != null) query = query.lte('date', to.toIso8601String().split('T').first);
+    final res = await query.order('date', ascending: false);
+    return (res as List).map((e) => Expense.fromJson(e)).toList();
+  }
+
+  static Future<void> addExpense(Expense e) async {
+    await _db.from('expenses').insert({
+      'store_id': _storeId,
+      ...e.toInsert(),
+    });
+  }
+
+  static Future<void> updateExpense(int id, Map<String, dynamic> data) async {
+    await _db.from('expenses').update(data).eq('id', id);
+  }
+
+  static Future<void> deleteExpense(int id) async {
+    await _db.from('expenses').delete().eq('id', id);
+  }
+
+  // ── Cash Register ─────────────────────────────────────────────────────────
+
+  static Future<CashRegister?> getOpenRegister() async {
+    final res = await _db
+        .from('cash_register')
+        .select()
+        .eq('store_id', _storeId)
+        .eq('status', 'open')
+        .order('opened_at', ascending: false)
+        .maybeSingle();
+    if (res == null) return null;
+    return CashRegister.fromJson(res);
+  }
+
+  static Future<CashRegister> openRegister(double openingBalance) async {
+    final res = await _db.from('cash_register').insert({
+      'store_id': _storeId,
+      'worker_name': WorkerService.workerName,
+      'opening_balance': openingBalance,
+    }).select().single();
+    return CashRegister.fromJson(res);
+  }
+
+  static Future<void> closeRegister(int id, double closingBalance, {String? notes}) async {
+    await _db.from('cash_register').update({
+      'closing_balance': closingBalance,
+      'status': 'closed',
+      'closed_at': DateTime.now().toIso8601String(),
+      'notes': notes,
+    }).eq('id', id);
+  }
+
+  static Future<void> addCashAdjustment({
+    required int registerId,
+    required String type,
+    required double amount,
+    String? reason,
+  }) async {
+    await _db.from('cash_adjustments').insert({
+      'register_id': registerId,
+      'store_id': _storeId,
+      'type': type,
+      'amount': amount,
+      'reason': reason,
+      'worker_name': WorkerService.workerName,
+    });
+
+    // Update the register totals
+    final reg = await _db.from('cash_register').select().eq('id', registerId).single();
+    if (type == 'in') {
+      final current = (reg['cash_in'] as num).toDouble();
+      await _db.from('cash_register').update({'cash_in': current + amount}).eq('id', registerId);
+    } else {
+      final current = (reg['cash_out'] as num).toDouble();
+      await _db.from('cash_register').update({'cash_out': current + amount}).eq('id', registerId);
+    }
+  }
+
+  static Future<List<CashAdjustment>> getCashAdjustments(int registerId) async {
+    final res = await _db
+        .from('cash_adjustments')
+        .select()
+        .eq('register_id', registerId)
+        .order('created_at', ascending: false);
+    return (res as List).map((e) => CashAdjustment.fromJson(e)).toList();
+  }
+
+  // ── Refunds ───────────────────────────────────────────────────────────────
+
+  static Future<Refund> createRefund({
+    required int invoiceId,
+    required List<InvoiceItem> items,
+    required double refundAmount,
+    String? reason,
+  }) async {
+    final res = await _db.from('refunds').insert({
+      'store_id': _storeId,
+      'invoice_id': invoiceId,
+      'worker_name': WorkerService.workerName,
+      'items': items.map((e) => e.toJson()).toList(),
+      'refund_amount': refundAmount,
+      'reason': reason,
+    }).select().single();
+    return Refund.fromJson(res);
+  }
+
+  static Future<List<Refund>> getRefunds({int? invoiceId}) async {
+    var query = _db.from('refunds').select().eq('store_id', _storeId);
+    if (invoiceId != null) query = query.eq('invoice_id', invoiceId);
+    final res = await query.order('created_at', ascending: false);
+    return (res as List).map((e) => Refund.fromJson(e)).toList();
+  }
+
+  // ── Sales Targets ─────────────────────────────────────────────────────────
+
+  static Future<List<Map<String, dynamic>>> getSalesTargets() async {
+    final res = await _db
+        .from('sales_targets')
+        .select()
+        .eq('store_id', _storeId)
+        .order('created_at', ascending: false);
+    return List<Map<String, dynamic>>.from(res as List);
+  }
+
+  static Future<void> createSalesTarget({
+    int? workerId,
+    String? workerName,
+    required String periodType,
+    required double targetAmount,
+    required DateTime periodStart,
+    required DateTime periodEnd,
+  }) async {
+    await _db.from('sales_targets').insert({
+      'store_id': _storeId,
+      'worker_id': workerId,
+      'worker_name': workerName,
+      'period_type': periodType,
+      'target_amount': targetAmount,
+      'period_start': periodStart.toIso8601String().split('T').first,
+      'period_end': periodEnd.toIso8601String().split('T').first,
+    });
+  }
+
+  static Future<void> deleteSalesTarget(int id) async {
+    await _db.from('sales_targets').delete().eq('id', id);
+  }
+
+  static Future<double> getWorkerSales({
+    required String workerName,
+    required DateTime from,
+    required DateTime to,
+  }) async {
+    final res = await _db
+        .from('invoices')
+        .select('customer_pays')
+        .eq('store_id', _storeId)
+        .eq('worker_name', workerName)
+        .gte('created_at', from.toIso8601String())
+        .lte('created_at', to.toIso8601String());
+    double total = 0;
+    for (final row in (res as List)) {
+      total += (row['customer_pays'] as num).toDouble();
+    }
+    return total;
+  }
+
   // ── Export / Import ────────────────────────────────────────────────────────
 
   static Future<String> exportJson() async {
@@ -224,6 +415,7 @@ class DatabaseService {
       'version': 2,
       'products': products.map((p) => {
         'name': p.name, 'barcode': p.barcode, 'price': p.price,
+        'cost_price': p.costPrice,
         'stock': p.stock, 'category': p.category,
         'created_at': p.createdAt?.toIso8601String(),
       }).toList(),
@@ -237,6 +429,7 @@ class DatabaseService {
         'marked_price': inv.markedPrice, 'discount': inv.discount,
         'customer_pays': inv.customerPays, 'amount_received': inv.amountReceived,
         'change_given': inv.change, 'payment_type': inv.paymentType,
+        'status': inv.status,
         'created_at': inv.createdAt.toIso8601String(),
       }).toList(),
     };
@@ -252,6 +445,7 @@ class DatabaseService {
         'store_id': _storeId,
         'name': row['name'], 'barcode': row['barcode'],
         'price': row['price'], 'stock': row['stock'],
+        'cost_price': row['cost_price'] ?? 0,
         'category': row['category'],
       });
       addedP++;
@@ -277,6 +471,7 @@ class DatabaseService {
         'amount_received': row['amount_received'],
         'change_given': row['change_given'],
         'payment_type': row['payment_type'] ?? 'cash',
+        'status': row['status'] ?? 'completed',
       });
       addedI++;
     }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../config.dart';
 import '../models/invoice.dart';
+import '../models/expense.dart';
 import '../services/database_service.dart';
 
 class ReportsScreen extends StatefulWidget {
@@ -16,6 +17,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   DateTime _from = DateTime.now().subtract(const Duration(days: 30));
   DateTime _to = DateTime.now();
   late Future<Map<String, dynamic>> _future;
+  late Future<List<Expense>> _expensesFuture;
 
   final _money =
       NumberFormat.currency(symbol: AppConfig.currency, decimalDigits: 2);
@@ -27,8 +29,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
     _reload();
   }
 
-  void _reload() => setState(
-      () => _future = DatabaseService.getSummary(from: _from, to: _to));
+  void _reload() => setState(() {
+        _future = DatabaseService.getSummary(from: _from, to: _to);
+        _expensesFuture = DatabaseService.getExpenses(from: _from, to: _to);
+      });
 
   Future<void> _pickRange() async {
     final result = await showDateRangePicker(
@@ -60,7 +64,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
             child: ListTile(
               leading: const Icon(Icons.date_range),
               title: Text(
-                  '${_dateFmt.format(_from)}  →  ${_dateFmt.format(_to)}'),
+                  '${_dateFmt.format(_from)}  ->  ${_dateFmt.format(_to)}'),
               trailing: const Icon(Icons.chevron_right),
               onTap: _pickRange,
             ),
@@ -79,6 +83,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
               final data = snap.data!;
               final revenue = data['total_revenue'] as double;
               final discount = data['total_discount'] as double;
+              final totalCost = data['total_cost'] as double;
+              final totalProfit = data['total_profit'] as double;
               final txns = data['total_transactions'] as int;
               final invoices = data['invoices'] as List<Invoice>;
               final productCounts =
@@ -91,7 +97,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Summary cards
+                  // Summary cards - Row 1
                   Row(children: [
                     Expanded(
                       child: _StatCard(
@@ -112,6 +118,30 @@ class _ReportsScreenState extends State<ReportsScreen> {
                     ),
                   ]),
                   const SizedBox(height: 8),
+
+                  // Row 2 - Cost & Profit
+                  Row(children: [
+                    Expanded(
+                      child: _StatCard(
+                        label: 'Cost',
+                        value: _money.format(totalCost),
+                        icon: Icons.shopping_bag_outlined,
+                        color: Colors.red,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _StatCard(
+                        label: 'Gross Profit',
+                        value: _money.format(totalProfit),
+                        icon: Icons.trending_up,
+                        color: totalProfit >= 0 ? Colors.teal : Colors.red,
+                      ),
+                    ),
+                  ]),
+                  const SizedBox(height: 8),
+
+                  // Row 3 - Discounts & Avg Sale
                   Row(children: [
                     Expanded(
                       child: _StatCard(
@@ -128,11 +158,62 @@ class _ReportsScreenState extends State<ReportsScreen> {
                         value: txns > 0
                             ? _money.format(revenue / txns)
                             : _money.format(0),
-                        icon: Icons.trending_up,
+                        icon: Icons.analytics_outlined,
                         color: Colors.purple,
                       ),
                     ),
                   ]),
+                  const SizedBox(height: 8),
+
+                  // Expenses section
+                  FutureBuilder<List<Expense>>(
+                    future: _expensesFuture,
+                    builder: (ctx, expSnap) {
+                      if (!expSnap.hasData) return const SizedBox.shrink();
+                      final expenses = expSnap.data!;
+                      final totalExpenses =
+                          expenses.fold<double>(0, (s, e) => s + e.amount);
+                      final netProfit = totalProfit - totalExpenses;
+
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(children: [
+                            Expanded(
+                              child: _StatCard(
+                                label: 'Expenses',
+                                value: _money.format(totalExpenses),
+                                icon: Icons.money_off,
+                                color: Colors.red.shade400,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: _StatCard(
+                                label: 'Net Profit',
+                                value: _money.format(netProfit),
+                                icon: Icons.account_balance_wallet,
+                                color: netProfit >= 0
+                                    ? Colors.green.shade700
+                                    : Colors.red.shade700,
+                              ),
+                            ),
+                          ]),
+                          if (expenses.isNotEmpty) ...[
+                            const SizedBox(height: 16),
+                            Text('Expense Breakdown',
+                                style: theme.textTheme.titleMedium),
+                            const SizedBox(height: 8),
+                            Card(
+                              child: Column(
+                                children: _buildExpenseBreakdown(expenses),
+                              ),
+                            ),
+                          ],
+                        ],
+                      );
+                    },
+                  ),
                   const SizedBox(height: 16),
 
                   // Top products
@@ -183,6 +264,22 @@ class _ReportsScreenState extends State<ReportsScreen> {
         ],
       ),
     );
+  }
+
+  List<Widget> _buildExpenseBreakdown(List<Expense> expenses) {
+    final Map<String, double> byCategory = {};
+    for (final e in expenses) {
+      byCategory[e.category] = (byCategory[e.category] ?? 0) + e.amount;
+    }
+    final sorted = byCategory.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return sorted
+        .map((e) => ListTile(
+              dense: true,
+              title: Text(e.key[0].toUpperCase() + e.key.substring(1)),
+              trailing: Text(_money.format(e.value)),
+            ))
+        .toList();
   }
 
   Widget _paymentBreakdown(List<Invoice> invoices) {

@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../config.dart';
 import '../models/invoice.dart';
+import '../models/refund.dart';
 import '../services/database_service.dart';
 import '../services/worker_service.dart';
 import '../services/receipt_service.dart';
+import 'refund_screen.dart';
 
 class InvoicesScreen extends StatefulWidget {
   const InvoicesScreen({super.key});
@@ -53,7 +55,7 @@ class _InvoicesScreenState extends State<InvoicesScreen> {
               invoice: invoices[i],
               moneyFmt: _money,
               dateFmt: _dateFmt,
-              onDeleted: WorkerService.isManager ? _reload : null,
+              onChanged: _reload,
             ),
           ),
         );
@@ -66,13 +68,13 @@ class _InvoiceTile extends StatelessWidget {
   final Invoice invoice;
   final NumberFormat moneyFmt;
   final DateFormat dateFmt;
-  final VoidCallback? onDeleted;
+  final VoidCallback? onChanged;
 
   const _InvoiceTile({
     required this.invoice,
     required this.moneyFmt,
     required this.dateFmt,
-    this.onDeleted,
+    this.onChanged,
   });
 
   @override
@@ -88,8 +90,16 @@ class _InvoiceTile extends StatelessWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('#${invoice.id}',
-                      style: const TextStyle(fontWeight: FontWeight.bold)),
+                  Row(
+                    children: [
+                      Text('#${invoice.id}',
+                          style: const TextStyle(fontWeight: FontWeight.bold)),
+                      if (invoice.status != 'completed') ...[
+                        const SizedBox(width: 6),
+                        _statusBadge(invoice.status),
+                      ],
+                    ],
+                  ),
                   Text(dateFmt.format(invoice.createdAt),
                       style: const TextStyle(fontSize: 12, color: Colors.grey)),
                   if (invoice.workerName != null)
@@ -106,7 +116,7 @@ class _InvoiceTile extends StatelessWidget {
                       Text(invoice.customerName!),
                     Text(
                         invoice.items
-                            .map((e) => '${e.productName} ×${e.qty}')
+                            .map((e) => '${e.productName} x${e.qty}')
                             .join(', '),
                         style: const TextStyle(
                             fontSize: 12, color: Colors.grey),
@@ -147,6 +157,37 @@ class _InvoiceTile extends StatelessWidget {
     );
   }
 
+  static Widget _statusBadge(String status) {
+    Color bg;
+    Color fg;
+    String label;
+    switch (status) {
+      case 'partially_refunded':
+        bg = Colors.orange.shade50;
+        fg = Colors.orange.shade800;
+        label = 'Partial Refund';
+        break;
+      case 'fully_refunded':
+        bg = Colors.red.shade50;
+        fg = Colors.red.shade800;
+        label = 'Refunded';
+        break;
+      default:
+        bg = Colors.green.shade50;
+        fg = Colors.green.shade800;
+        label = status;
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(label,
+          style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: fg)),
+    );
+  }
+
   void _showDetail(BuildContext context) {
     showModalBottomSheet(
       context: context,
@@ -155,27 +196,54 @@ class _InvoiceTile extends StatelessWidget {
         invoice: invoice,
         moneyFmt: moneyFmt,
         dateFmt: dateFmt,
-        onDeleted: onDeleted,
+        onChanged: onChanged,
       ),
     );
   }
 }
 
-class _InvoiceDetail extends StatelessWidget {
+class _InvoiceDetail extends StatefulWidget {
   final Invoice invoice;
   final NumberFormat moneyFmt;
   final DateFormat dateFmt;
-  final VoidCallback? onDeleted;
+  final VoidCallback? onChanged;
 
   const _InvoiceDetail({
     required this.invoice,
     required this.moneyFmt,
     required this.dateFmt,
-    this.onDeleted,
+    this.onChanged,
   });
 
   @override
+  State<_InvoiceDetail> createState() => _InvoiceDetailState();
+}
+
+class _InvoiceDetailState extends State<_InvoiceDetail> {
+  List<Refund> _refunds = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRefunds();
+  }
+
+  Future<void> _loadRefunds() async {
+    try {
+      final refunds =
+          await DatabaseService.getRefunds(invoiceId: widget.invoice.id);
+      if (mounted) setState(() => _refunds = refunds);
+    } catch (_) {
+      // ignore
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final invoice = widget.invoice;
+    final moneyFmt = widget.moneyFmt;
+    final dateFmt = widget.dateFmt;
+
     return DraggableScrollableSheet(
       expand: false,
       initialChildSize: 0.8,
@@ -188,9 +256,18 @@ class _InvoiceDetail extends StatelessWidget {
           children: [
             Row(
               children: [
-                Text('Invoice #${invoice.id}',
-                    style: Theme.of(context).textTheme.titleLarge),
-                const Spacer(),
+                Expanded(
+                  child: Row(
+                    children: [
+                      Text('Invoice #${invoice.id}',
+                          style: Theme.of(context).textTheme.titleLarge),
+                      if (invoice.status != 'completed') ...[
+                        const SizedBox(width: 8),
+                        _InvoiceTile._statusBadge(invoice.status),
+                      ],
+                    ],
+                  ),
+                ),
                 IconButton(
                   icon: const Icon(Icons.share),
                   tooltip: 'Share Receipt',
@@ -205,6 +282,33 @@ class _InvoiceDetail extends StatelessWidget {
             ),
             Text(dateFmt.format(invoice.createdAt),
                 style: const TextStyle(color: Colors.grey)),
+
+            // WhatsApp/SMS buttons
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                OutlinedButton.icon(
+                  icon: Icon(Icons.chat, color: Colors.green.shade700, size: 18),
+                  label: Text('WhatsApp',
+                      style: TextStyle(color: Colors.green.shade700, fontSize: 12)),
+                  onPressed: () => ReceiptService.sendViaWhatsApp(
+                    invoice,
+                    phone: invoice.customerPhone,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  icon: Icon(Icons.sms, color: Colors.blue.shade700, size: 18),
+                  label: Text('SMS',
+                      style: TextStyle(color: Colors.blue.shade700, fontSize: 12)),
+                  onPressed: () => ReceiptService.sendViaSMS(
+                    invoice,
+                    phone: invoice.customerPhone,
+                  ),
+                ),
+              ],
+            ),
+
             const Divider(),
 
             if (invoice.customerName != null) ...[
@@ -222,7 +326,7 @@ class _InvoiceDetail extends StatelessWidget {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text('${item.productName} ×${item.qty}'),
+                      Text('${item.productName} x${item.qty}'),
                       Text(moneyFmt.format(item.total)),
                     ],
                   ),
@@ -231,7 +335,7 @@ class _InvoiceDetail extends StatelessWidget {
 
             _row('Marked Price', moneyFmt.format(invoice.markedPrice)),
             if (invoice.discount > 0)
-              _row('Discount', '− ${moneyFmt.format(invoice.discount)}',
+              _row('Discount', '- ${moneyFmt.format(invoice.discount)}',
                   valueColor: Colors.orange),
             _row('Customer Pays', moneyFmt.format(invoice.customerPays),
                 bold: true, valueColor: Colors.green.shade700),
@@ -255,8 +359,73 @@ class _InvoiceDetail extends StatelessWidget {
             _row('Payment',
                 invoice.paymentType == 'cash' ? 'Cash' : 'QuickPay'),
 
-            if (onDeleted != null) ...[
-              const SizedBox(height: 20),
+            // Refund info
+            if (_refunds.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Text('Refunds', style: Theme.of(context).textTheme.titleSmall),
+              const SizedBox(height: 4),
+              ...(_refunds.map((r) => Card(
+                    color: Colors.red.shade50,
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text('Refund: ${moneyFmt.format(r.refundAmount)}',
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.red.shade700)),
+                              if (r.createdAt != null)
+                                Text(
+                                    DateFormat('MMM d, h:mm a')
+                                        .format(r.createdAt!),
+                                    style: const TextStyle(
+                                        fontSize: 11, color: Colors.grey)),
+                            ],
+                          ),
+                          if (r.reason != null && r.reason!.isNotEmpty)
+                            Text('Reason: ${r.reason}',
+                                style: const TextStyle(fontSize: 12)),
+                          ...r.items.map((item) => Text(
+                              '  ${item.productName} x${item.qty}',
+                              style: const TextStyle(fontSize: 12))),
+                        ],
+                      ),
+                    ),
+                  ))),
+            ],
+
+            // Process Return button
+            if (WorkerService.isManager &&
+                invoice.status != 'fully_refunded') ...[
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  icon: Icon(Icons.assignment_return, color: Colors.orange.shade700),
+                  label: Text('Process Return',
+                      style: TextStyle(color: Colors.orange.shade700)),
+                  onPressed: () async {
+                    Navigator.pop(context);
+                    final result = await Navigator.of(context).push<bool>(
+                      MaterialPageRoute(
+                        builder: (_) => RefundScreen(invoice: invoice),
+                      ),
+                    );
+                    if (result == true && widget.onChanged != null) {
+                      widget.onChanged!();
+                    }
+                  },
+                ),
+              ),
+            ],
+
+            // Delete button
+            if (WorkerService.isManager) ...[
+              const SizedBox(height: 8),
               SizedBox(
                 width: double.infinity,
                 child: OutlinedButton.icon(
@@ -283,7 +452,7 @@ class _InvoiceDetail extends StatelessWidget {
                     if (ok == true) {
                       await DatabaseService.deleteInvoice(invoice.id);
                       if (context.mounted) Navigator.pop(context);
-                      onDeleted!();
+                      widget.onChanged?.call();
                     }
                   },
                 ),

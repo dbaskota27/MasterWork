@@ -7,12 +7,17 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- ── Drop old tables if they exist ───────────────────────────────────────────
-DROP TABLE IF EXISTS workers    CASCADE;
-DROP TABLE IF EXISTS invoices   CASCADE;
-DROP TABLE IF EXISTS customers  CASCADE;
-DROP TABLE IF EXISTS products   CASCADE;
-DROP TABLE IF EXISTS store_users CASCADE;
-DROP TABLE IF EXISTS stores     CASCADE;
+DROP TABLE IF EXISTS cash_adjustments CASCADE;
+DROP TABLE IF EXISTS cash_register    CASCADE;
+DROP TABLE IF EXISTS refunds          CASCADE;
+DROP TABLE IF EXISTS expenses         CASCADE;
+DROP TABLE IF EXISTS sales_targets    CASCADE;
+DROP TABLE IF EXISTS workers          CASCADE;
+DROP TABLE IF EXISTS invoices         CASCADE;
+DROP TABLE IF EXISTS customers        CASCADE;
+DROP TABLE IF EXISTS products         CASCADE;
+DROP TABLE IF EXISTS store_users      CASCADE;
+DROP TABLE IF EXISTS stores           CASCADE;
 DROP FUNCTION IF EXISTS get_my_store_id();
 DROP FUNCTION IF EXISTS get_my_profile();
 DROP FUNCTION IF EXISTS create_store_with_owner(text,text,text,text,text);
@@ -33,19 +38,20 @@ DROP FUNCTION IF EXISTS delete_worker(uuid);
 -- ══════════════════════════════════════════════════════════════════════════════
 
 CREATE TABLE stores (
-  id                  uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  name                text NOT NULL DEFAULT 'My Store',
-  address             text DEFAULT '',
-  phone               text DEFAULT '',
-  email               text DEFAULT '',
-  currency            text DEFAULT '$',
-  tax_rate            numeric DEFAULT 0,
-  payment_qr          text DEFAULT '',
-  points_per_unit     numeric DEFAULT 1,
-  points_value        numeric DEFAULT 0.01,
-  subscription_status text DEFAULT 'active' CHECK (subscription_status IN ('trial', 'active', 'expired', 'suspended')),
-  subscription_expiry timestamptz,
-  created_at          timestamptz DEFAULT now()
+  id                          uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  name                        text NOT NULL DEFAULT 'My Store',
+  address                     text DEFAULT '',
+  phone                       text DEFAULT '',
+  email                       text DEFAULT '',
+  currency                    text DEFAULT '$',
+  tax_rate                    numeric DEFAULT 0,
+  payment_qr                  text DEFAULT '',
+  points_per_unit             numeric DEFAULT 1,
+  points_value                numeric DEFAULT 0.01,
+  default_low_stock_threshold integer NOT NULL DEFAULT 5,
+  subscription_status         text DEFAULT 'active' CHECK (subscription_status IN ('trial', 'active', 'expired', 'suspended')),
+  subscription_expiry         timestamptz,
+  created_at                  timestamptz DEFAULT now()
 );
 
 CREATE TABLE store_users (
@@ -71,15 +77,17 @@ CREATE TABLE workers (
 );
 
 CREATE TABLE products (
-  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  store_id   uuid NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
-  name       text NOT NULL,
-  barcode    text,
-  price      numeric NOT NULL DEFAULT 0,
-  stock      integer NOT NULL DEFAULT 0,
-  category   text,
-  image_url  text,
-  created_at timestamptz DEFAULT now()
+  id                  bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  store_id            uuid NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+  name                text NOT NULL,
+  barcode             text,
+  price               numeric NOT NULL DEFAULT 0,
+  cost_price          numeric NOT NULL DEFAULT 0,
+  stock               integer NOT NULL DEFAULT 0,
+  low_stock_threshold integer NOT NULL DEFAULT 5,
+  category            text,
+  image_url           text,
+  created_at          timestamptz DEFAULT now()
 );
 
 CREATE TABLE customers (
@@ -108,29 +116,104 @@ CREATE TABLE invoices (
   amount_received numeric NOT NULL DEFAULT 0,
   change_given    numeric NOT NULL DEFAULT 0,
   payment_type    text NOT NULL DEFAULT 'cash',
+  status          text NOT NULL DEFAULT 'completed' CHECK (status IN ('completed', 'partially_refunded', 'fully_refunded')),
   created_at      timestamptz DEFAULT now()
 );
 
+CREATE TABLE refunds (
+  id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  store_id      uuid NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+  invoice_id    bigint NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+  worker_name   text,
+  items         jsonb DEFAULT '[]',
+  refund_amount numeric DEFAULT 0,
+  reason        text,
+  created_at    timestamptz DEFAULT now()
+);
+
+CREATE TABLE cash_register (
+  id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  store_id        uuid NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+  worker_name     text,
+  date            date DEFAULT CURRENT_DATE,
+  opening_balance numeric DEFAULT 0,
+  closing_balance numeric,
+  cash_in         numeric DEFAULT 0,
+  cash_out        numeric DEFAULT 0,
+  notes           text,
+  status          text DEFAULT 'open' CHECK (status IN ('open', 'closed')),
+  opened_at       timestamptz DEFAULT now(),
+  closed_at       timestamptz,
+  created_at      timestamptz DEFAULT now()
+);
+
+CREATE TABLE cash_adjustments (
+  id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  register_id bigint NOT NULL REFERENCES cash_register(id) ON DELETE CASCADE,
+  store_id    uuid NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+  type        text NOT NULL CHECK (type IN ('in', 'out')),
+  amount      numeric NOT NULL,
+  reason      text,
+  worker_name text,
+  created_at  timestamptz DEFAULT now()
+);
+
+CREATE TABLE expenses (
+  id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  store_id    uuid NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+  category    text DEFAULT 'other',
+  amount      numeric NOT NULL,
+  description text,
+  date        date DEFAULT CURRENT_DATE,
+  worker_name text,
+  created_at  timestamptz DEFAULT now()
+);
+
+CREATE TABLE sales_targets (
+  id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  store_id      uuid NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+  worker_id     bigint REFERENCES workers(id) ON DELETE SET NULL,
+  worker_name   text,
+  period_type   text DEFAULT 'daily' CHECK (period_type IN ('daily', 'monthly')),
+  target_amount numeric DEFAULT 0,
+  period_start  date NOT NULL,
+  period_end    date NOT NULL,
+  created_at    timestamptz DEFAULT now()
+);
+
 -- ── Indexes ─────────────────────────────────────────────────────────────────
-CREATE INDEX idx_store_users_user_id  ON store_users(user_id);
-CREATE INDEX idx_store_users_store_id ON store_users(store_id);
-CREATE INDEX idx_workers_store_id     ON workers(store_id);
-CREATE INDEX idx_products_store_id    ON products(store_id);
-CREATE INDEX idx_products_barcode     ON products(store_id, barcode);
-CREATE INDEX idx_customers_store_id   ON customers(store_id);
-CREATE INDEX idx_invoices_store_id    ON invoices(store_id);
-CREATE INDEX idx_invoices_created     ON invoices(store_id, created_at DESC);
+CREATE INDEX idx_store_users_user_id       ON store_users(user_id);
+CREATE INDEX idx_store_users_store_id      ON store_users(store_id);
+CREATE INDEX idx_workers_store_id          ON workers(store_id);
+CREATE INDEX idx_products_store_id         ON products(store_id);
+CREATE INDEX idx_products_barcode          ON products(store_id, barcode);
+CREATE INDEX idx_customers_store_id        ON customers(store_id);
+CREATE INDEX idx_invoices_store_id         ON invoices(store_id);
+CREATE INDEX idx_invoices_created          ON invoices(store_id, created_at DESC);
+CREATE INDEX idx_refunds_store_id          ON refunds(store_id);
+CREATE INDEX idx_refunds_invoice_id        ON refunds(invoice_id);
+CREATE INDEX idx_cash_register_store_id    ON cash_register(store_id);
+CREATE INDEX idx_cash_adjustments_store_id ON cash_adjustments(store_id);
+CREATE INDEX idx_cash_adjustments_reg_id   ON cash_adjustments(register_id);
+CREATE INDEX idx_expenses_store_id         ON expenses(store_id);
+CREATE INDEX idx_expenses_date             ON expenses(store_id, date DESC);
+CREATE INDEX idx_sales_targets_store_id    ON sales_targets(store_id);
 
 -- ══════════════════════════════════════════════════════════════════════════════
 -- ROW LEVEL SECURITY
 -- ══════════════════════════════════════════════════════════════════════════════
 
-ALTER TABLE stores        ENABLE ROW LEVEL SECURITY;
-ALTER TABLE store_users   ENABLE ROW LEVEL SECURITY;
-ALTER TABLE products      ENABLE ROW LEVEL SECURITY;
-ALTER TABLE customers     ENABLE ROW LEVEL SECURITY;
-ALTER TABLE invoices      ENABLE ROW LEVEL SECURITY;
-ALTER TABLE workers       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE stores            ENABLE ROW LEVEL SECURITY;
+ALTER TABLE store_users       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE products          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE customers         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE invoices          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE workers           ENABLE ROW LEVEL SECURITY;
+ALTER TABLE refunds           ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cash_register     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cash_adjustments  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE expenses          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sales_targets     ENABLE ROW LEVEL SECURITY;
 
 -- Helper: get the current user's store_id
 CREATE OR REPLACE FUNCTION get_my_store_id()
@@ -162,6 +245,18 @@ CREATE POLICY "Customers by store" ON customers FOR ALL
 CREATE POLICY "Invoices by store" ON invoices FOR ALL
   USING (store_id = get_my_store_id());
 CREATE POLICY "Workers by store" ON workers FOR ALL
+  USING (store_id = get_my_store_id());
+
+-- ── Refunds / Cash Register / Expenses / Sales Targets policies ─────────────
+CREATE POLICY "Refunds by store" ON refunds FOR ALL
+  USING (store_id = get_my_store_id());
+CREATE POLICY "Cash register by store" ON cash_register FOR ALL
+  USING (store_id = get_my_store_id());
+CREATE POLICY "Cash adjustments by store" ON cash_adjustments FOR ALL
+  USING (store_id = get_my_store_id());
+CREATE POLICY "Expenses by store" ON expenses FOR ALL
+  USING (store_id = get_my_store_id());
+CREATE POLICY "Sales targets by store" ON sales_targets FOR ALL
   USING (store_id = get_my_store_id());
 
 -- ══════════════════════════════════════════════════════════════════════════════

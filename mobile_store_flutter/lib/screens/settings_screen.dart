@@ -7,8 +7,10 @@ import 'package:intl/intl.dart';
 import '../services/auth_service.dart';
 import '../services/worker_service.dart';
 import '../services/database_service.dart';
+import '../services/theme_service.dart';
 import 'login_screen.dart';
-import 'worker_login_screen.dart';
+import 'sales_targets_screen.dart';
+import 'cash_register_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -23,6 +25,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        // Dark Mode toggle
+        Card(
+          margin: EdgeInsets.zero,
+          child: ValueListenableBuilder<ThemeMode>(
+            valueListenable: ThemeService.themeMode,
+            builder: (ctx, mode, _) {
+              return SwitchListTile(
+                secondary: Icon(
+                  mode == ThemeMode.dark
+                      ? Icons.dark_mode
+                      : Icons.light_mode,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+                title: const Text('Dark Mode'),
+                subtitle: Text(mode == ThemeMode.dark
+                    ? 'On'
+                    : mode == ThemeMode.light
+                        ? 'Off'
+                        : 'System'),
+                value: mode == ThemeMode.dark,
+                onChanged: (val) {
+                  ThemeService.setThemeMode(
+                      val ? ThemeMode.dark : ThemeMode.light);
+                },
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 8),
+
         // Store Info (manager)
         if (WorkerService.isManager)
           _SectionTile(
@@ -49,6 +81,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
             title: 'User Management',
             subtitle: 'Add, edit, or remove workers & managers',
             onTap: () => _push(const _UserManagementScreen()),
+          ),
+          const SizedBox(height: 8),
+        ],
+
+        // Sales Targets (manager)
+        if (WorkerService.isManager) ...[
+          _SectionTile(
+            icon: Icons.track_changes,
+            title: 'Sales Targets',
+            subtitle: 'Set daily/monthly targets per worker',
+            onTap: () => _push(const SalesTargetsScreen()),
+          ),
+          const SizedBox(height: 8),
+        ],
+
+        // Cash Register (manager)
+        if (WorkerService.isManager) ...[
+          _SectionTile(
+            icon: Icons.point_of_sale,
+            title: 'Cash Register',
+            subtitle: 'Open/close register, track cash flow',
+            onTap: () => _push(const CashRegisterScreen()),
           ),
           const SizedBox(height: 8),
         ],
@@ -201,15 +255,16 @@ class _StoreInfoScreen extends StatefulWidget {
 
 class _StoreInfoScreenState extends State<_StoreInfoScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _name         = TextEditingController();
-  final _address      = TextEditingController();
-  final _phone        = TextEditingController();
-  final _email        = TextEditingController();
-  final _paymentQr    = TextEditingController();
-  final _currency     = TextEditingController();
-  final _taxRate      = TextEditingController();
-  final _pointsPerUnit = TextEditingController();
-  final _pointsValue   = TextEditingController();
+  final _name              = TextEditingController();
+  final _address           = TextEditingController();
+  final _phone             = TextEditingController();
+  final _email             = TextEditingController();
+  final _paymentQr         = TextEditingController();
+  final _currency          = TextEditingController();
+  final _taxRate           = TextEditingController();
+  final _pointsPerUnit     = TextEditingController();
+  final _pointsValue       = TextEditingController();
+  final _defaultLowStock   = TextEditingController();
   bool _loading = true, _saving = false;
 
   @override
@@ -230,13 +285,14 @@ class _StoreInfoScreenState extends State<_StoreInfoScreen> {
       _taxRate.text   = (info['tax_rate'] ?? 0).toString();
       _pointsPerUnit.text = (info['points_per_unit'] ?? 1).toString();
       _pointsValue.text   = (info['points_value'] ?? 0.01).toString();
+      _defaultLowStock.text = (info['default_low_stock_threshold'] ?? 5).toString();
     } catch (_) {}
     setState(() => _loading = false);
   }
 
   @override
   void dispose() {
-    for (final c in [_name, _address, _phone, _email, _paymentQr, _currency, _taxRate, _pointsPerUnit, _pointsValue]) {
+    for (final c in [_name, _address, _phone, _email, _paymentQr, _currency, _taxRate, _pointsPerUnit, _pointsValue, _defaultLowStock]) {
       c.dispose();
     }
     super.dispose();
@@ -256,6 +312,7 @@ class _StoreInfoScreenState extends State<_StoreInfoScreen> {
         'tax_rate':       double.tryParse(_taxRate.text) ?? 0,
         'points_per_unit': double.tryParse(_pointsPerUnit.text) ?? 1,
         'points_value':    double.tryParse(_pointsValue.text) ?? 0.01,
+        'default_low_stock_threshold': int.tryParse(_defaultLowStock.text) ?? 5,
       });
       if (mounted) {
         ScaffoldMessenger.of(context)
@@ -290,6 +347,11 @@ class _StoreInfoScreenState extends State<_StoreInfoScreen> {
                   _f(_currency, 'Currency Symbol', hint: '\$'),
                   _f(_taxRate, 'Tax Rate (0.08 = 8%)',
                       type: const TextInputType.numberWithOptions(decimal: true)),
+                  const SizedBox(height: 8),
+                  Text('Inventory', style: Theme.of(context).textTheme.titleSmall),
+                  const SizedBox(height: 8),
+                  _f(_defaultLowStock, 'Default Low Stock Threshold',
+                      hint: '5', type: TextInputType.number),
                   const SizedBox(height: 8),
                   Text('Loyalty Points', style: Theme.of(context).textTheme.titleSmall),
                   const SizedBox(height: 8),

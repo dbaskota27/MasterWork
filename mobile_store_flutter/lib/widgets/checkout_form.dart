@@ -133,6 +133,7 @@ class _CheckoutFormState extends State<CheckoutForm> {
                 productName: c.product.name,
                 qty: c.qty,
                 unitPrice: c.product.price,
+                costPrice: c.product.costPrice,
               ))
           .toList();
 
@@ -204,7 +205,7 @@ class _CheckoutFormState extends State<CheckoutForm> {
                         dense: true,
                         title: Text(c.product.name),
                         subtitle: Text(
-                            '${_money.format(c.product.price)} × ${c.qty}'),
+                            '${_money.format(c.product.price)} x ${c.qty}'),
                         trailing: Text(_money.format(c.total),
                             style: const TextStyle(fontWeight: FontWeight.w500)),
                       )),
@@ -466,6 +467,29 @@ class _ReceiptView extends StatelessWidget {
               icon: const Icon(Icons.picture_as_pdf),
               label: const Text('Share / Print Receipt'),
               onPressed: () => ReceiptService.shareReceipt(invoice),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                OutlinedButton.icon(
+                  icon: Icon(Icons.chat, color: Colors.green.shade700),
+                  label: Text('WhatsApp', style: TextStyle(color: Colors.green.shade700)),
+                  onPressed: () => ReceiptService.sendViaWhatsApp(
+                    invoice,
+                    phone: invoice.customerPhone,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                OutlinedButton.icon(
+                  icon: Icon(Icons.sms, color: Colors.blue.shade700),
+                  label: Text('SMS', style: TextStyle(color: Colors.blue.shade700)),
+                  onPressed: () => ReceiptService.sendViaSMS(
+                    invoice,
+                    phone: invoice.customerPhone,
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 12),
             OutlinedButton.icon(

@@ -2,11 +2,13 @@ class InvoiceItem {
   final String productName;
   final int qty;
   final double unitPrice;
+  final double costPrice;
 
   const InvoiceItem({
     required this.productName,
     required this.qty,
     required this.unitPrice,
+    this.costPrice = 0,
   });
 
   double get total => qty * unitPrice;
@@ -15,12 +17,14 @@ class InvoiceItem {
         productName: j['product_name'] as String,
         qty: (j['qty'] as num).toInt(),
         unitPrice: (j['unit_price'] as num).toDouble(),
+        costPrice: (j['cost_price'] as num?)?.toDouble() ?? 0,
       );
 
   Map<String, dynamic> toJson() => {
         'product_name': productName,
         'qty': qty,
         'unit_price': unitPrice,
+        'cost_price': costPrice,
       };
 }
 
@@ -39,6 +43,7 @@ class Invoice {
   final String paymentType;
   final double pointsEarned;
   final double pointsRedeemed;
+  final String status;
   final DateTime createdAt;
 
   const Invoice({
@@ -56,6 +61,7 @@ class Invoice {
     required this.paymentType,
     this.pointsEarned = 0,
     this.pointsRedeemed = 0,
+    this.status = 'completed',
     required this.createdAt,
   });
 
@@ -82,6 +88,7 @@ class Invoice {
       paymentType: j['payment_type'] as String? ?? 'cash',
       pointsEarned: (j['points_earned'] as num?)?.toDouble() ?? 0,
       pointsRedeemed: (j['points_redeemed'] as num?)?.toDouble() ?? 0,
+      status: j['status'] as String? ?? 'completed',
       createdAt: DateTime.parse(j['created_at'] as String),
     );
   }
