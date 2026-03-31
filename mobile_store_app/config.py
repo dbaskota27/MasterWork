@@ -3,9 +3,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://rejdtwdnbsuvypmjfpjr.supabase.co")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
 
 STORE_NAME = os.getenv("STORE_NAME", "My Mobile Store")
 STORE_ADDRESS = os.getenv("STORE_ADDRESS", "")
@@ -15,7 +15,7 @@ TAX_RATE = float(os.getenv("TAX_RATE", "0"))
 CURRENCY = os.getenv("CURRENCY", "$")
 STORE_PAYMENT_QR = os.getenv("STORE_PAYMENT_QR", "")
 
-MANAGER_USERNAME = os.getenv("MANAGER_USERNAME", "manager")
-MANAGER_PASSWORD = os.getenv("MANAGER_PASSWORD", "admin123")
-WORKER_USERNAME  = os.getenv("WORKER_USERNAME",  "worker")
-WORKER_PASSWORD  = os.getenv("WORKER_PASSWORD",  "worker123")
+MANAGER_USERNAME = os.getenv("MANAGER_USERNAME", "")
+MANAGER_PASSWORD = os.getenv("MANAGER_PASSWORD", "")
+WORKER_USERNAME  = os.getenv("WORKER_USERNAME",  "")
+WORKER_PASSWORD  = os.getenv("WORKER_PASSWORD",  "")
