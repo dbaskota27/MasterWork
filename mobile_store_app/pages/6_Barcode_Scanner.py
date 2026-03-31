@@ -24,11 +24,14 @@ def _product_card(product):
     cat_name = product.get("categories") or {}
     if isinstance(cat_name, dict):
         cat_name = cat_name.get("name", "—")
-    stock     = int(product.get("stock_qty") or 0)
-    min_stock = int(product.get("min_stock") or 5)
-    icon      = "🔴" if stock == 0 else ("🟡" if stock <= min_stock else "🟢")
+    stock      = int(product.get("stock_qty") or 0)
+    min_stock  = int(product.get("min_stock") or 5)
+    cost_price = float(product.get("cost_price") or 0)
+    sell_price = float(product.get("sell_price") or 0)
+    barcode    = product.get("barcode") or "—"
+    icon       = "🔴" if stock == 0 else ("🟡" if stock <= min_stock else "🟢")
     with st.container(border=True):
-        c1, c2 = st.columns([3, 1])
+        c1, c2, c3 = st.columns([3, 1, 1])
         with c1:
             st.markdown(f"**{product['name']}**")
             st.caption(
@@ -36,9 +39,15 @@ def _product_card(product):
                 f"Model: {product.get('model') or '—'}  |  "
                 f"Category: {cat_name}"
             )
-            st.write(f"Price: **{CURRENCY}{float(product.get('sell_price') or 0):.2f}**")
+            st.caption(f"Barcode: `{barcode}`")
+            st.write(
+                f"Cost: **{CURRENCY}{cost_price:.2f}**  |  "
+                f"Sell: **{CURRENCY}{sell_price:.2f}**"
+            )
         with c2:
             st.metric("Stock", f"{icon} {stock}")
+        with c3:
+            st.metric("Min Stock", min_stock)
 
 
 # ─── Session state init ───────────────────────────────────────────────────────
