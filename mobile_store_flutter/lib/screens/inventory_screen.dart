@@ -85,7 +85,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
           ),
         ],
       ),
-      floatingActionButton: WorkerService.isManager
+      floatingActionButton: WorkerService.hasPermission('inventory_edit')
           ? FloatingActionButton.extended(
               icon: const Icon(Icons.add),
               label: const Text('Add Product'),
@@ -145,7 +145,7 @@ class _ProductTile extends StatelessWidget {
           moneyFmt.format(product.price),
           style: const TextStyle(fontWeight: FontWeight.bold),
         ),
-        onTap: WorkerService.isManager
+        onTap: WorkerService.hasPermission('inventory_edit')
             ? () => _showEditDialog(context)
             : null,
       ),

@@ -399,7 +399,7 @@ class _InvoiceDetailState extends State<_InvoiceDetail> {
             ],
 
             // Process Return button
-            if (WorkerService.isManager &&
+            if (WorkerService.hasPermission('invoices_refund') &&
                 invoice.status != 'fully_refunded') ...[
               const SizedBox(height: 16),
               SizedBox(
@@ -424,7 +424,7 @@ class _InvoiceDetailState extends State<_InvoiceDetail> {
             ],
 
             // Delete button
-            if (WorkerService.isManager) ...[
+            if (WorkerService.hasPermission('invoices_refund')) ...[
               const SizedBox(height: 8),
               SizedBox(
                 width: double.infinity,

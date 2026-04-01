@@ -6,7 +6,13 @@
 -- Enable pgcrypto for worker password hashing
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
--- ── Drop old tables if they exist ───────────────────────────────────────────
+-- ── Drop old/leftover tables from previous apps ────────────────────────────
+DROP TABLE IF EXISTS categories       CASCADE;
+DROP TABLE IF EXISTS sales            CASCADE;
+DROP TABLE IF EXISTS inventory        CASCADE;
+DROP TABLE IF EXISTS sync_log         CASCADE;
+
+-- ── Drop current tables (to recreate fresh) ─────────────────────────────────
 DROP TABLE IF EXISTS cash_adjustments CASCADE;
 DROP TABLE IF EXISTS cash_register    CASCADE;
 DROP TABLE IF EXISTS refunds          CASCADE;
@@ -24,8 +30,10 @@ DROP FUNCTION IF EXISTS create_store_with_owner(text,text,text,text,text);
 DROP FUNCTION IF EXISTS create_store_with_owner(text,text,text,text,text,text,text);
 DROP FUNCTION IF EXISTS authenticate_worker(text,text);
 DROP FUNCTION IF EXISTS create_worker_account(text,text,text,text);
+DROP FUNCTION IF EXISTS create_worker_account(text,text,text,text,jsonb);
 DROP FUNCTION IF EXISTS list_workers();
 DROP FUNCTION IF EXISTS update_worker_account(bigint,text,text);
+DROP FUNCTION IF EXISTS update_worker_account(bigint,text,text,jsonb);
 DROP FUNCTION IF EXISTS change_worker_password(bigint,text);
 DROP FUNCTION IF EXISTS delete_worker_account(bigint);
 DROP FUNCTION IF EXISTS add_worker_to_store(uuid,text,text);
@@ -71,6 +79,7 @@ CREATE TABLE workers (
   password_hash text NOT NULL,
   display_name  text NOT NULL,
   role          text NOT NULL DEFAULT 'worker' CHECK (role IN ('manager', 'worker')),
+  permissions   jsonb DEFAULT '{}',
   is_active     boolean DEFAULT true,
   created_at    timestamptz DEFAULT now(),
   UNIQUE(store_id, username)
@@ -297,8 +306,9 @@ BEGIN
   INSERT INTO store_users (user_id, store_id, role, display_name)
   VALUES (auth.uid(), v_store_id, 'manager', p_display_name);
 
-  INSERT INTO workers (store_id, username, password_hash, display_name, role)
-  VALUES (v_store_id, lower(p_username), crypt(p_password, gen_salt('bf')), p_display_name, 'manager');
+  INSERT INTO workers (store_id, username, password_hash, display_name, role, permissions)
+  VALUES (v_store_id, lower(p_username), crypt(p_password, gen_salt('bf')), p_display_name, 'manager',
+    '{"inventory_view":true,"inventory_edit":true,"customers_view":true,"customers_edit":true,"sales":true,"invoices_view":true,"invoices_refund":true,"expenses_view":true,"expenses_edit":true,"reports":true,"cash_register":true,"dashboard":true}'::jsonb);
 
   RETURN v_store_id;
 END;
@@ -306,10 +316,10 @@ $$;
 
 -- Authenticate worker by username + password
 CREATE OR REPLACE FUNCTION authenticate_worker(p_username text, p_password text)
-RETURNS TABLE(id bigint, display_name text, role text)
+RETURNS TABLE(id bigint, display_name text, role text, permissions jsonb)
 LANGUAGE sql STABLE SECURITY DEFINER
 AS $$
-  SELECT w.id, w.display_name, w.role
+  SELECT w.id, w.display_name, w.role, COALESCE(w.permissions, '{}'::jsonb)
   FROM workers w
   WHERE w.store_id = (SELECT store_id FROM store_users WHERE user_id = auth.uid() LIMIT 1)
     AND w.username = lower(p_username)
@@ -323,7 +333,8 @@ CREATE OR REPLACE FUNCTION create_worker_account(
   p_username text,
   p_password text,
   p_display_name text,
-  p_role text DEFAULT 'worker'
+  p_role text DEFAULT 'worker',
+  p_permissions jsonb DEFAULT '{}'
 )
 RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER
@@ -334,29 +345,29 @@ BEGIN
   v_store_id := (SELECT store_id FROM store_users WHERE user_id = auth.uid() LIMIT 1);
   IF v_store_id IS NULL THEN RAISE EXCEPTION 'No store linked'; END IF;
 
-  INSERT INTO workers (store_id, username, password_hash, display_name, role)
-  VALUES (v_store_id, lower(p_username), crypt(p_password, gen_salt('bf')), p_display_name, p_role);
+  INSERT INTO workers (store_id, username, password_hash, display_name, role, permissions)
+  VALUES (v_store_id, lower(p_username), crypt(p_password, gen_salt('bf')), p_display_name, p_role, p_permissions);
 END;
 $$;
 
 -- List all workers in the store
 CREATE OR REPLACE FUNCTION list_workers()
-RETURNS TABLE(id bigint, username text, display_name text, role text, is_active boolean, created_at timestamptz)
+RETURNS TABLE(id bigint, username text, display_name text, role text, is_active boolean, created_at timestamptz, permissions jsonb)
 LANGUAGE sql STABLE SECURITY DEFINER
 AS $$
-  SELECT w.id, w.username, w.display_name, w.role, w.is_active, w.created_at
+  SELECT w.id, w.username, w.display_name, w.role, w.is_active, w.created_at, COALESCE(w.permissions, '{}'::jsonb)
   FROM workers w
   WHERE w.store_id = (SELECT store_id FROM store_users WHERE user_id = auth.uid() LIMIT 1)
   ORDER BY w.created_at;
 $$;
 
--- Update worker name/role
-CREATE OR REPLACE FUNCTION update_worker_account(p_id bigint, p_display_name text, p_role text)
+-- Update worker name/role/permissions
+CREATE OR REPLACE FUNCTION update_worker_account(p_id bigint, p_display_name text, p_role text, p_permissions jsonb DEFAULT '{}')
 RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER
 AS $$
 BEGIN
-  UPDATE workers SET display_name = p_display_name, role = p_role
+  UPDATE workers SET display_name = p_display_name, role = p_role, permissions = p_permissions
   WHERE id = p_id
     AND store_id = (SELECT store_id FROM store_users WHERE user_id = auth.uid() LIMIT 1);
 END;

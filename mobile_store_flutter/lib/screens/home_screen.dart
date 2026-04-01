@@ -22,15 +22,21 @@ class _HomeScreenState extends State<HomeScreen> {
   int _selectedIndex = 0;
 
   late final List<_NavItem> _items = [
-    _NavItem(label: 'Home',      icon: Icons.dashboard_outlined,    screen: const DashboardScreen()),
-    _NavItem(label: 'New Sale',  icon: Icons.point_of_sale,         screen: const NewSaleScreen()),
-    _NavItem(label: 'Scanner',   icon: Icons.qr_code_scanner,       screen: const BarcodeScannerScreen()),
-    _NavItem(label: 'Inventory', icon: Icons.inventory_2_outlined,  screen: const InventoryScreen()),
-    _NavItem(label: 'Invoices',  icon: Icons.receipt_long,          screen: const InvoicesScreen()),
-    _NavItem(label: 'Customers', icon: Icons.people_outline,        screen: const CustomersScreen()),
-    if (WorkerService.isManager)
+    if (WorkerService.hasPermission('dashboard'))
+      _NavItem(label: 'Home',      icon: Icons.dashboard_outlined,    screen: const DashboardScreen()),
+    if (WorkerService.hasPermission('sales'))
+      _NavItem(label: 'New Sale',  icon: Icons.point_of_sale,         screen: const NewSaleScreen()),
+    if (WorkerService.hasPermission('sales'))
+      _NavItem(label: 'Scanner',   icon: Icons.qr_code_scanner,       screen: const BarcodeScannerScreen()),
+    if (WorkerService.hasPermission('inventory_view'))
+      _NavItem(label: 'Inventory', icon: Icons.inventory_2_outlined,  screen: const InventoryScreen()),
+    if (WorkerService.hasPermission('invoices_view'))
+      _NavItem(label: 'Invoices',  icon: Icons.receipt_long,          screen: const InvoicesScreen()),
+    if (WorkerService.hasPermission('customers_view'))
+      _NavItem(label: 'Customers', icon: Icons.people_outline,        screen: const CustomersScreen()),
+    if (WorkerService.hasPermission('expenses_view'))
       _NavItem(label: 'Expenses', icon: Icons.money_off_outlined,   screen: const ExpensesScreen()),
-    if (WorkerService.isManager)
+    if (WorkerService.hasPermission('reports'))
       _NavItem(label: 'Reports',  icon: Icons.bar_chart,            screen: const ReportsScreen()),
     _NavItem(label: 'Settings',  icon: Icons.settings_outlined,     screen: const SettingsScreen()),
   ];

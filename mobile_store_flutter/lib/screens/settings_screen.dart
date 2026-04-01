@@ -96,8 +96,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 8),
         ],
 
-        // Cash Register (manager)
-        if (WorkerService.isManager) ...[
+        // Cash Register
+        if (WorkerService.hasPermission('cash_register')) ...[
           _SectionTile(
             icon: Icons.point_of_sale,
             title: 'Cash Register',
@@ -614,108 +614,176 @@ class _UserManagementScreenState extends State<_UserManagementScreen> {
     String role = 'worker';
     bool saving = false;
     String? error;
+    final perms = <String, bool>{
+      for (final k in WorkerService.allPermissionKeys) k: false,
+    };
 
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheetState) => Padding(
-          padding: EdgeInsets.only(
-            bottom: MediaQuery.of(ctx).viewInsets.bottom,
-            left: 20, right: 20, top: 20,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('Add Worker', style: Theme.of(ctx).textTheme.titleLarge),
-              const SizedBox(height: 16),
-              TextField(
-                controller: nameCtrl,
-                decoration: const InputDecoration(labelText: 'Display Name *'),
-                textCapitalization: TextCapitalization.words,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: usernameCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Username *',
-                  hintText: 'e.g. ram, worker1',
+        builder: (ctx, setSheetState) => DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.85,
+          maxChildSize: 0.95,
+          minChildSize: 0.5,
+          builder: (ctx, scrollCtrl) => Padding(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.of(ctx).viewInsets.bottom,
+              left: 20, right: 20, top: 20,
+            ),
+            child: ListView(
+              controller: scrollCtrl,
+              children: [
+                Text('Add Worker', style: Theme.of(ctx).textTheme.titleLarge, textAlign: TextAlign.center),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(labelText: 'Display Name *'),
+                  textCapitalization: TextCapitalization.words,
                 ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: passCtrl,
-                decoration: const InputDecoration(labelText: 'Password *'),
-                obscureText: true,
-              ),
-              const SizedBox(height: 12),
-              Row(children: [
-                Expanded(
-                  child: RadioListTile<String>(
-                    title: const Text('Worker'),
-                    value: 'worker',
-                    groupValue: role,
-                    contentPadding: EdgeInsets.zero,
-                    onChanged: (v) => setSheetState(() => role = v!),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: usernameCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Username *',
+                    hintText: 'e.g. ram, worker1',
                   ),
                 ),
-                Expanded(
-                  child: RadioListTile<String>(
-                    title: const Text('Manager'),
-                    value: 'manager',
-                    groupValue: role,
-                    contentPadding: EdgeInsets.zero,
-                    onChanged: (v) => setSheetState(() => role = v!),
-                  ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: passCtrl,
+                  decoration: const InputDecoration(labelText: 'Password *'),
+                  obscureText: true,
                 ),
-              ]),
-              if (error != null) ...[
-                const SizedBox(height: 8),
-                Text(error!, style: const TextStyle(color: Colors.red, fontSize: 13)),
+                const SizedBox(height: 12),
+                Row(children: [
+                  Expanded(
+                    child: RadioListTile<String>(
+                      title: const Text('Worker'),
+                      value: 'worker',
+                      groupValue: role,
+                      contentPadding: EdgeInsets.zero,
+                      onChanged: (v) => setSheetState(() => role = v!),
+                    ),
+                  ),
+                  Expanded(
+                    child: RadioListTile<String>(
+                      title: const Text('Manager'),
+                      value: 'manager',
+                      groupValue: role,
+                      contentPadding: EdgeInsets.zero,
+                      onChanged: (v) => setSheetState(() => role = v!),
+                    ),
+                  ),
+                ]),
+                if (role == 'worker') ...[
+                  const SizedBox(height: 12),
+                  Text('Permissions', style: Theme.of(ctx).textTheme.titleMedium),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      TextButton(
+                        onPressed: () => setSheetState(() {
+                          for (final k in WorkerService.allPermissionKeys) {
+                            perms[k] = true;
+                          }
+                        }),
+                        child: const Text('Select All'),
+                      ),
+                      const SizedBox(width: 8),
+                      TextButton(
+                        onPressed: () => setSheetState(() {
+                          for (final k in WorkerService.allPermissionKeys) {
+                            perms[k] = false;
+                          }
+                        }),
+                        child: const Text('Clear All'),
+                      ),
+                    ],
+                  ),
+                  ...WorkerService.allPermissionKeys.map((key) =>
+                    SwitchListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(
+                        WorkerService.permissionLabels[key] ?? key,
+                        style: const TextStyle(fontSize: 14),
+                      ),
+                      value: perms[key] ?? false,
+                      onChanged: (v) => setSheetState(() => perms[key] = v),
+                    ),
+                  ),
+                ],
+                if (role == 'manager') ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(children: [
+                      Icon(Icons.info_outline, size: 18, color: Colors.blue.shade700),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text(
+                          'Managers automatically have all permissions.',
+                          style: TextStyle(fontSize: 13),
+                        ),
+                      ),
+                    ]),
+                  ),
+                ],
+                if (error != null) ...[
+                  const SizedBox(height: 8),
+                  Text(error!, style: const TextStyle(color: Colors.red, fontSize: 13)),
+                ],
+                const SizedBox(height: 16),
+                Row(children: [
+                  Expanded(
+                    child: OutlinedButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        child: const Text('Cancel')),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: saving ? null : () async {
+                        if (nameCtrl.text.trim().isEmpty ||
+                            usernameCtrl.text.trim().isEmpty ||
+                            passCtrl.text.length < 4) {
+                          setSheetState(() => error = 'Fill all fields. Password min 4 chars.');
+                          return;
+                        }
+                        setSheetState(() { saving = true; error = null; });
+                        try {
+                          await WorkerService.createWorker(
+                            username: usernameCtrl.text.trim(),
+                            password: passCtrl.text,
+                            displayName: nameCtrl.text.trim(),
+                            role: role,
+                            permissions: perms,
+                          );
+                          if (ctx.mounted) Navigator.pop(ctx);
+                          _load();
+                        } catch (e) {
+                          setSheetState(() {
+                            saving = false;
+                            error = e.toString().replaceAll('Exception: ', '');
+                          });
+                        }
+                      },
+                      child: saving
+                          ? const SizedBox(height: 20, width: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : const Text('Create'),
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: 20),
               ],
-              const SizedBox(height: 16),
-              Row(children: [
-                Expanded(
-                  child: OutlinedButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      child: const Text('Cancel')),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: FilledButton(
-                    onPressed: saving ? null : () async {
-                      if (nameCtrl.text.trim().isEmpty ||
-                          usernameCtrl.text.trim().isEmpty ||
-                          passCtrl.text.length < 4) {
-                        setSheetState(() => error = 'Fill all fields. Password min 4 chars.');
-                        return;
-                      }
-                      setSheetState(() { saving = true; error = null; });
-                      try {
-                        await WorkerService.createWorker(
-                          username: usernameCtrl.text.trim(),
-                          password: passCtrl.text,
-                          displayName: nameCtrl.text.trim(),
-                          role: role,
-                        );
-                        if (ctx.mounted) Navigator.pop(ctx);
-                        _load();
-                      } catch (e) {
-                        setSheetState(() {
-                          saving = false;
-                          error = e.toString().replaceAll('Exception: ', '');
-                        });
-                      }
-                    },
-                    child: saving
-                        ? const SizedBox(height: 20, width: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                        : const Text('Create'),
-                  ),
-                ),
-              ]),
-              const SizedBox(height: 20),
-            ],
+            ),
           ),
         ),
       ),
@@ -726,71 +794,148 @@ class _UserManagementScreenState extends State<_UserManagementScreen> {
     final nameCtrl = TextEditingController(text: user['display_name'] ?? '');
     String role = user['role'] ?? 'worker';
     final id = (user['id'] as num).toInt();
+    // Parse existing permissions from the user record
+    final rawPerms = user['permissions'];
+    final perms = <String, bool>{};
+    if (rawPerms is Map) {
+      for (final k in WorkerService.allPermissionKeys) {
+        perms[k] = rawPerms[k] == true;
+      }
+    } else {
+      for (final k in WorkerService.allPermissionKeys) {
+        perms[k] = false;
+      }
+    }
 
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheetState) => Padding(
-          padding: EdgeInsets.only(
-            bottom: MediaQuery.of(ctx).viewInsets.bottom,
-            left: 20, right: 20, top: 20,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('Edit User', style: Theme.of(ctx).textTheme.titleLarge),
-              const SizedBox(height: 16),
-              TextField(
-                controller: nameCtrl,
-                decoration: const InputDecoration(labelText: 'Display Name'),
-                textCapitalization: TextCapitalization.words,
-              ),
-              const SizedBox(height: 12),
-              Row(children: [
-                Expanded(
-                  child: RadioListTile<String>(
-                    title: const Text('Worker'),
-                    value: 'worker',
-                    groupValue: role,
-                    contentPadding: EdgeInsets.zero,
-                    onChanged: (v) => setSheetState(() => role = v!),
+        builder: (ctx, setSheetState) => DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.85,
+          maxChildSize: 0.95,
+          minChildSize: 0.5,
+          builder: (ctx, scrollCtrl) => Padding(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.of(ctx).viewInsets.bottom,
+              left: 20, right: 20, top: 20,
+            ),
+            child: ListView(
+              controller: scrollCtrl,
+              children: [
+                Text('Edit User', style: Theme.of(ctx).textTheme.titleLarge, textAlign: TextAlign.center),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(labelText: 'Display Name'),
+                  textCapitalization: TextCapitalization.words,
+                ),
+                const SizedBox(height: 12),
+                Row(children: [
+                  Expanded(
+                    child: RadioListTile<String>(
+                      title: const Text('Worker'),
+                      value: 'worker',
+                      groupValue: role,
+                      contentPadding: EdgeInsets.zero,
+                      onChanged: (v) => setSheetState(() => role = v!),
+                    ),
                   ),
-                ),
-                Expanded(
-                  child: RadioListTile<String>(
-                    title: const Text('Manager'),
-                    value: 'manager',
-                    groupValue: role,
-                    contentPadding: EdgeInsets.zero,
-                    onChanged: (v) => setSheetState(() => role = v!),
+                  Expanded(
+                    child: RadioListTile<String>(
+                      title: const Text('Manager'),
+                      value: 'manager',
+                      groupValue: role,
+                      contentPadding: EdgeInsets.zero,
+                      onChanged: (v) => setSheetState(() => role = v!),
+                    ),
                   ),
-                ),
-              ]),
-              const SizedBox(height: 16),
-              Row(children: [
-                Expanded(
-                  child: OutlinedButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      child: const Text('Cancel')),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: FilledButton(
-                    onPressed: () async {
-                      await WorkerService.updateWorker(id,
-                        displayName: nameCtrl.text.trim(),
-                        role: role,
-                      );
-                      if (ctx.mounted) Navigator.pop(ctx);
-                      _load();
-                    },
-                    child: const Text('Save'),
+                ]),
+                if (role == 'worker') ...[
+                  const SizedBox(height: 12),
+                  Text('Permissions', style: Theme.of(ctx).textTheme.titleMedium),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      TextButton(
+                        onPressed: () => setSheetState(() {
+                          for (final k in WorkerService.allPermissionKeys) {
+                            perms[k] = true;
+                          }
+                        }),
+                        child: const Text('Select All'),
+                      ),
+                      const SizedBox(width: 8),
+                      TextButton(
+                        onPressed: () => setSheetState(() {
+                          for (final k in WorkerService.allPermissionKeys) {
+                            perms[k] = false;
+                          }
+                        }),
+                        child: const Text('Clear All'),
+                      ),
+                    ],
                   ),
-                ),
-              ]),
-              const SizedBox(height: 20),
-            ],
+                  ...WorkerService.allPermissionKeys.map((key) =>
+                    SwitchListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(
+                        WorkerService.permissionLabels[key] ?? key,
+                        style: const TextStyle(fontSize: 14),
+                      ),
+                      value: perms[key] ?? false,
+                      onChanged: (v) => setSheetState(() => perms[key] = v),
+                    ),
+                  ),
+                ],
+                if (role == 'manager') ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(children: [
+                      Icon(Icons.info_outline, size: 18, color: Colors.blue.shade700),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text(
+                          'Managers automatically have all permissions.',
+                          style: TextStyle(fontSize: 13),
+                        ),
+                      ),
+                    ]),
+                  ),
+                ],
+                const SizedBox(height: 16),
+                Row(children: [
+                  Expanded(
+                    child: OutlinedButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        child: const Text('Cancel')),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: () async {
+                        await WorkerService.updateWorker(id,
+                          displayName: nameCtrl.text.trim(),
+                          role: role,
+                          permissions: perms,
+                        );
+                        if (ctx.mounted) Navigator.pop(ctx);
+                        _load();
+                      },
+                      child: const Text('Save'),
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: 20),
+              ],
+            ),
           ),
         ),
       ),

@@ -77,7 +77,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
           ),
         ],
       ),
-      floatingActionButton: WorkerService.isManager
+      floatingActionButton: WorkerService.hasPermission('customers_edit')
           ? FloatingActionButton.extended(
               icon: const Icon(Icons.person_add),
               label: const Text('Add Customer'),
@@ -132,7 +132,7 @@ class _CustomerTile extends StatelessWidget {
           if (customer.email != null) customer.email!,
           '${customer.pointsBalance.toStringAsFixed(0)} pts',
         ].join(' · ')),
-        onTap: WorkerService.isManager
+        onTap: WorkerService.hasPermission('customers_edit')
             ? () => _showEdit(context)
             : null,
       ),

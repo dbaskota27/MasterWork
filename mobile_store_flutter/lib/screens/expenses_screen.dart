@@ -128,7 +128,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                                       fontWeight: FontWeight.bold,
                                       color: Colors.red.shade700),
                                 ),
-                                onTap: WorkerService.isManager
+                                onTap: WorkerService.hasPermission('expenses_edit')
                                     ? () => _showEditDialog(e)
                                     : null,
                               ),
@@ -144,7 +144,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           ),
         ],
       ),
-      floatingActionButton: WorkerService.isManager
+      floatingActionButton: WorkerService.hasPermission('expenses_edit')
           ? FloatingActionButton.extended(
               icon: const Icon(Icons.add),
               label: const Text('Add Expense'),
