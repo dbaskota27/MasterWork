@@ -100,7 +100,6 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
 
   // Multi-scan (Stock IN) — collect all barcodes from a phone box
   final List<ScannedCode> _scannedCodes = [];
-  bool _autoFinishScheduled = false;
 
   @override
   void dispose() {
@@ -116,7 +115,6 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
       _lastScanned = null;
       _unknownBarcode = null;
       _scannedCodes.clear();
-      _autoFinishScheduled = false;
     });
     await _controller.start();
   }
@@ -128,7 +126,6 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
       _lastScanned = null;
       _unknownBarcode = null;
       _scannedCodes.clear();
-      _autoFinishScheduled = false;
     });
     await _controller.start();
   }
@@ -204,17 +201,6 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
       ));
     }
 
-    // Auto-proceed: once we have 2+ different barcode types, wait 2 seconds
-    // then auto-finish (gives time for any remaining barcodes to be picked up)
-    final types = _scannedCodes.map((s) => s.type).toSet();
-    if (types.length >= 2 && !_autoFinishScheduled) {
-      _autoFinishScheduled = true;
-      Future.delayed(const Duration(seconds: 2), () {
-        if (mounted && _step == _Step.camera) {
-          _finishMultiScan();
-        }
-      });
-    }
   }
 
   void _finishMultiScan() async {
