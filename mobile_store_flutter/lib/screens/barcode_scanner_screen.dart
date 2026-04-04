@@ -100,6 +100,7 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
 
   // Multi-scan (Stock IN) — collect all barcodes from a phone box
   final List<ScannedCode> _scannedCodes = [];
+  bool _autoFinishScheduled = false;
 
   @override
   void dispose() {
@@ -115,6 +116,7 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
       _lastScanned = null;
       _unknownBarcode = null;
       _scannedCodes.clear();
+      _autoFinishScheduled = false;
     });
     await _controller.start();
   }
@@ -125,6 +127,8 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
       _processing = false;
       _lastScanned = null;
       _unknownBarcode = null;
+      _scannedCodes.clear();
+      _autoFinishScheduled = false;
     });
     await _controller.start();
   }
@@ -198,6 +202,18 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
         duration: const Duration(seconds: 1),
         behavior: SnackBarBehavior.floating,
       ));
+    }
+
+    // Auto-proceed: once we have 2+ different barcode types, wait 2 seconds
+    // then auto-finish (gives time for any remaining barcodes to be picked up)
+    final types = _scannedCodes.map((s) => s.type).toSet();
+    if (types.length >= 2 && !_autoFinishScheduled) {
+      _autoFinishScheduled = true;
+      Future.delayed(const Duration(seconds: 2), () {
+        if (mounted && _step == _Step.camera) {
+          _finishMultiScan();
+        }
+      });
     }
   }
 
@@ -846,53 +862,68 @@ class _AddProductView extends StatefulWidget {
 }
 
 class _AddProductViewState extends State<_AddProductView> {
-  final _formKey    = GlobalKey<FormState>();
-  final _name       = TextEditingController();
-  final _brand      = TextEditingController();
-  final _model      = TextEditingController();
-  final _imei       = TextEditingController();
-  final _serial     = TextEditingController();
-  final _barcode    = TextEditingController();
-  final _price      = TextEditingController();
-  final _costPrice  = TextEditingController();
-  final _stock      = TextEditingController(text: '1');
-  final _category   = TextEditingController();
-  bool _saving      = false;
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _name;
+  late final TextEditingController _brand;
+  late final TextEditingController _model;
+  late final TextEditingController _imei;
+  late final TextEditingController _serial;
+  late final TextEditingController _barcode;
+  late final TextEditingController _price;
+  late final TextEditingController _costPrice;
+  late final TextEditingController _stock;
+  late final TextEditingController _category;
+  bool _saving = false;
 
   @override
   void initState() {
     super.initState();
 
+    // Extract values from scanned codes
+    String imeiVal = '';
+    String barcodeVal = '';
+    String serialVal = '';
+
     if (widget.scannedCodes.isNotEmpty) {
-      // Pre-fill from multi-scan results
       for (final sc in widget.scannedCodes) {
         switch (sc.type) {
           case BarcodeType.imei:
-            if (_imei.text.isEmpty) _imei.text = sc.value;
+            if (imeiVal.isEmpty) imeiVal = sc.value;
             break;
           case BarcodeType.ean:
-            if (_barcode.text.isEmpty) _barcode.text = sc.value;
+            if (barcodeVal.isEmpty) barcodeVal = sc.value;
             break;
           case BarcodeType.serial:
-            if (_serial.text.isEmpty) _serial.text = sc.value;
+            if (serialVal.isEmpty) serialVal = sc.value;
             break;
         }
       }
     } else if (widget.barcode.isNotEmpty) {
-      // Single unknown barcode — classify and fill the right field
       final type = classifyBarcode(widget.barcode);
       switch (type) {
         case BarcodeType.imei:
-          _imei.text = widget.barcode;
+          imeiVal = widget.barcode;
           break;
         case BarcodeType.ean:
-          _barcode.text = widget.barcode;
+          barcodeVal = widget.barcode;
           break;
         case BarcodeType.serial:
-          _serial.text = widget.barcode;
+          serialVal = widget.barcode;
           break;
       }
     }
+
+    // Initialize controllers with pre-filled values
+    _name      = TextEditingController();
+    _brand     = TextEditingController();
+    _model     = TextEditingController();
+    _imei      = TextEditingController(text: imeiVal);
+    _serial    = TextEditingController(text: serialVal);
+    _barcode   = TextEditingController(text: barcodeVal);
+    _price     = TextEditingController();
+    _costPrice = TextEditingController();
+    _stock     = TextEditingController(text: '1');
+    _category  = TextEditingController();
   }
 
   @override
