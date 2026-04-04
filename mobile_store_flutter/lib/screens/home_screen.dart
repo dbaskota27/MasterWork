@@ -20,8 +20,9 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _selectedIndex = 0;
+  static const int _maxBottomItems = 6;
 
-  late final List<_NavItem> _items = [
+  late final List<_NavItem> _allItems = [
     if (WorkerService.hasPermission('dashboard'))
       _NavItem(label: 'Home',      icon: Icons.dashboard_outlined,    screen: const DashboardScreen()),
     if (WorkerService.hasPermission('sales'))
@@ -41,6 +42,30 @@ class _HomeScreenState extends State<HomeScreen> {
     _NavItem(label: 'Settings',  icon: Icons.settings_outlined,     screen: const SettingsScreen()),
   ];
 
+  bool get _needsMoreTab => _allItems.length > _maxBottomItems + 1;
+
+  List<_NavItem> get _bottomItems =>
+      _needsMoreTab ? _allItems.sublist(0, _maxBottomItems) : _allItems;
+
+  List<_NavItem> get _overflowItems =>
+      _needsMoreTab ? _allItems.sublist(_maxBottomItems) : [];
+
+  int get _effectiveIndex {
+    if (!_needsMoreTab) return _selectedIndex;
+    if (_selectedIndex < _maxBottomItems) return _selectedIndex;
+    return _maxBottomItems; // "More" tab
+  }
+
+  Widget get _currentScreen {
+    if (_selectedIndex < _allItems.length) return _allItems[_selectedIndex].screen;
+    return const SizedBox.shrink();
+  }
+
+  String get _currentTitle {
+    if (_selectedIndex < _allItems.length) return _allItems[_selectedIndex].label;
+    return 'More';
+  }
+
   void _switchUser() {
     WorkerService.logout();
     Navigator.of(context).pushReplacement(
@@ -48,13 +73,59 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Widget _buildMoreGrid() {
+    return Padding(
+      padding: const EdgeInsets.all(20),
+      child: GridView.count(
+        crossAxisCount: 3,
+        mainAxisSpacing: 16,
+        crossAxisSpacing: 16,
+        children: _overflowItems.map((item) {
+          final globalIndex = _allItems.indexOf(item);
+          final isSelected = _selectedIndex == globalIndex;
+          return GestureDetector(
+            onTap: () => setState(() => _selectedIndex = globalIndex),
+            child: Container(
+              decoration: BoxDecoration(
+                color: isSelected
+                    ? Theme.of(context).colorScheme.primaryContainer
+                    : Theme.of(context).colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(item.icon, size: 32,
+                      color: isSelected
+                          ? Theme.of(context).colorScheme.primary
+                          : Theme.of(context).colorScheme.onSurfaceVariant),
+                  const SizedBox(height: 8),
+                  Text(item.label,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                        color: isSelected
+                            ? Theme.of(context).colorScheme.primary
+                            : Theme.of(context).colorScheme.onSurfaceVariant,
+                      )),
+                ],
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final showMoreScreen = _needsMoreTab && _selectedIndex >= _maxBottomItems;
+
     return Scaffold(
       appBar: AppBar(
-        title: Text(_items[_selectedIndex].label),
+        title: Text(_currentTitle),
         actions: [
-          // Active worker badge
           GestureDetector(
             onTap: _switchUser,
             child: Container(
@@ -89,16 +160,35 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      body: _items[_selectedIndex].screen,
+      body: showMoreScreen ? _buildMoreGrid() : _currentScreen,
       bottomNavigationBar: NavigationBar(
-        selectedIndex: _selectedIndex,
-        onDestinationSelected: (i) => setState(() => _selectedIndex = i),
-        destinations: _items
-            .map((item) => NavigationDestination(
-                  icon: Icon(item.icon),
-                  label: item.label,
-                ))
-            .toList(),
+        selectedIndex: _effectiveIndex,
+        onDestinationSelected: (i) {
+          if (_needsMoreTab && i == _maxBottomItems) {
+            // Tapped "More" — show the grid but keep _selectedIndex
+            // so we can highlight the active overflow item
+            setState(() {
+              // If already viewing an overflow item, stay there;
+              // otherwise jump to the first overflow item index to show grid
+              if (_selectedIndex < _maxBottomItems) {
+                _selectedIndex = _maxBottomItems;
+              }
+            });
+          } else {
+            setState(() => _selectedIndex = i);
+          }
+        },
+        destinations: [
+          ..._bottomItems.map((item) => NavigationDestination(
+                icon: Icon(item.icon),
+                label: item.label,
+              )),
+          if (_needsMoreTab)
+            const NavigationDestination(
+              icon: Icon(Icons.more_horiz),
+              label: 'More',
+            ),
+        ],
       ),
     );
   }

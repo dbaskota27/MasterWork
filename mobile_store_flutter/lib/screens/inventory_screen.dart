@@ -58,7 +58,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 final products = (snap.data ?? [])
                     .where((p) =>
                         p.name.toLowerCase().contains(_search) ||
-                        (p.barcode?.contains(_search) ?? false) ||
+                        (p.barcode?.toLowerCase().contains(_search) ?? false) ||
+                        (p.brand?.toLowerCase().contains(_search) ?? false) ||
+                        (p.model?.toLowerCase().contains(_search) ?? false) ||
+                        (p.imei?.contains(_search) ?? false) ||
+                        (p.serialNumber?.toLowerCase().contains(_search) ?? false) ||
                         (p.category?.toLowerCase().contains(_search) ?? false))
                     .toList();
 
@@ -139,8 +143,12 @@ class _ProductTile extends StatelessWidget {
           ),
         ),
         title: Text(product.name),
-        subtitle: Text(
-            '${product.category ?? "Uncategorized"} · ${product.barcode ?? "No barcode"}'),
+        subtitle: Text([
+          product.brand ?? product.category ?? 'Uncategorized',
+          if (product.model != null) product.model!,
+          if (product.imei != null) 'IMEI: ${product.imei!}',
+          if (product.imei == null) product.barcode ?? 'No barcode',
+        ].join(' · ')),
         trailing: Text(
           moneyFmt.format(product.price),
           style: const TextStyle(fontWeight: FontWeight.bold),
@@ -166,6 +174,10 @@ class _ProductTile extends StatelessWidget {
             'stock': p.stock,
             'low_stock_threshold': p.lowStockThreshold,
             'barcode': p.barcode,
+            'brand': p.brand,
+            'model': p.model,
+            'imei': p.imei,
+            'serial_number': p.serialNumber,
             'category': p.category,
           });
           onUpdated();
@@ -195,6 +207,10 @@ class _ProductForm extends StatefulWidget {
 class _ProductFormState extends State<_ProductForm> {
   final _formKey = GlobalKey<FormState>();
   late TextEditingController _name;
+  late TextEditingController _brand;
+  late TextEditingController _model;
+  late TextEditingController _imei;
+  late TextEditingController _serial;
   late TextEditingController _price;
   late TextEditingController _costPrice;
   late TextEditingController _stock;
@@ -208,6 +224,10 @@ class _ProductFormState extends State<_ProductForm> {
     super.initState();
     final p = widget.existing;
     _name = TextEditingController(text: p?.name ?? '');
+    _brand = TextEditingController(text: p?.brand ?? '');
+    _model = TextEditingController(text: p?.model ?? '');
+    _imei = TextEditingController(text: p?.imei ?? '');
+    _serial = TextEditingController(text: p?.serialNumber ?? '');
     _price =
         TextEditingController(text: p != null ? p.price.toStringAsFixed(2) : '');
     _costPrice =
@@ -222,6 +242,10 @@ class _ProductFormState extends State<_ProductForm> {
   @override
   void dispose() {
     _name.dispose();
+    _brand.dispose();
+    _model.dispose();
+    _imei.dispose();
+    _serial.dispose();
     _price.dispose();
     _costPrice.dispose();
     _stock.dispose();
@@ -237,6 +261,10 @@ class _ProductFormState extends State<_ProductForm> {
     final p = Product(
       id: widget.existing?.id ?? 0,
       name: _name.text.trim(),
+      brand: _brand.text.trim().isEmpty ? null : _brand.text.trim(),
+      model: _model.text.trim().isEmpty ? null : _model.text.trim(),
+      imei: _imei.text.trim().isEmpty ? null : _imei.text.trim(),
+      serialNumber: _serial.text.trim().isEmpty ? null : _serial.text.trim(),
       price: double.parse(_price.text),
       costPrice: double.tryParse(_costPrice.text) ?? 0,
       stock: int.parse(_stock.text),
@@ -331,10 +359,39 @@ class _ProductFormState extends State<_ProductForm> {
                 ),
               ]),
               const SizedBox(height: 10),
+              Row(children: [
+                Expanded(
+                  child: TextFormField(
+                    controller: _brand,
+                    decoration: const InputDecoration(labelText: 'Brand'),
+                    textCapitalization: TextCapitalization.words,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: TextFormField(
+                    controller: _model,
+                    decoration: const InputDecoration(labelText: 'Model'),
+                    textCapitalization: TextCapitalization.words,
+                  ),
+                ),
+              ]),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _imei,
+                decoration: const InputDecoration(labelText: 'IMEI'),
+                keyboardType: TextInputType.number,
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _serial,
+                decoration: const InputDecoration(labelText: 'Serial Number (S/N)'),
+              ),
+              const SizedBox(height: 10),
               TextFormField(
                 controller: _barcode,
                 decoration:
-                    const InputDecoration(labelText: 'Barcode'),
+                    const InputDecoration(labelText: 'Product Barcode (EAN/UPC)'),
               ),
               const SizedBox(height: 10),
               TextFormField(

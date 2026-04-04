@@ -7,6 +7,71 @@ import '../models/cart_item.dart';
 import '../services/database_service.dart';
 import '../widgets/checkout_form.dart';
 
+// ═══════════════════════════════════════════════════
+// Barcode classification — identifies what a scanned code is
+// ═══════════════════════════════════════════════════
+
+enum BarcodeType { imei, ean, serial }
+
+class ScannedCode {
+  final String value;
+  BarcodeType type;
+
+  ScannedCode({required this.value, required this.type});
+
+  String get label {
+    switch (type) {
+      case BarcodeType.imei:
+        return 'IMEI';
+      case BarcodeType.ean:
+        return 'Product Barcode';
+      case BarcodeType.serial:
+        return 'Serial / S/N';
+    }
+  }
+
+  IconData get icon {
+    switch (type) {
+      case BarcodeType.imei:
+        return Icons.phone_android;
+      case BarcodeType.ean:
+        return Icons.qr_code;
+      case BarcodeType.serial:
+        return Icons.tag;
+    }
+  }
+
+  Color get color {
+    switch (type) {
+      case BarcodeType.imei:
+        return Colors.blue;
+      case BarcodeType.ean:
+        return Colors.green;
+      case BarcodeType.serial:
+        return Colors.orange;
+    }
+  }
+}
+
+BarcodeType classifyBarcode(String code) {
+  final digitsOnly = RegExp(r'^\d+$').hasMatch(code);
+
+  // IMEI: exactly 15 digits
+  if (digitsOnly && code.length == 15) return BarcodeType.imei;
+
+  // EAN-13 (13 digits), UPC-A (12 digits), EAN-8 (8 digits)
+  if (digitsOnly && (code.length == 13 || code.length == 12 || code.length == 8)) {
+    return BarcodeType.ean;
+  }
+
+  // Everything else — serial number
+  return BarcodeType.serial;
+}
+
+// ═══════════════════════════════════════════════════
+// Main screen
+// ═══════════════════════════════════════════════════
+
 class BarcodeScannerScreen extends StatefulWidget {
   const BarcodeScannerScreen({super.key});
 
@@ -14,7 +79,7 @@ class BarcodeScannerScreen extends StatefulWidget {
   State<BarcodeScannerScreen> createState() => _BarcodeScannerScreenState();
 }
 
-enum _Step { camera, cartReview, checkout, addProduct }
+enum _Step { camera, cartReview, checkout, addProduct, multiScanReview }
 
 class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
   final MobileScannerController _controller = MobileScannerController();
@@ -29,18 +94,18 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
 
   // Last scanned (used in cartReview step)
   Product? _lastScanned;
-  int _lastQty = 1;
 
   // Unknown barcode
   String? _unknownBarcode;
+
+  // Multi-scan (Stock IN) — collect all barcodes from a phone box
+  final List<ScannedCode> _scannedCodes = [];
 
   @override
   void dispose() {
     _controller.dispose();
     super.dispose();
   }
-
-  // ── Reset to camera (clear cart too) ─────────────────────────────────────
 
   Future<void> _resetAll() async {
     setState(() {
@@ -49,11 +114,10 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
       _cart.clear();
       _lastScanned = null;
       _unknownBarcode = null;
+      _scannedCodes.clear();
     });
     await _controller.start();
   }
-
-  // ── Resume scanning (keep cart) ───────────────────────────────────────────
 
   Future<void> _scanAnother() async {
     setState(() {
@@ -65,9 +129,9 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
     await _controller.start();
   }
 
-  // ── Barcode detected ──────────────────────────────────────────────────────
+  // ── Stock OUT: detect & look up ─────────────────────────────────────────
 
-  Future<void> _onDetect(BarcodeCapture capture) async {
+  Future<void> _onDetectStockOut(BarcodeCapture capture) async {
     if (_step != _Step.camera || _processing) return;
     final code = capture.barcodes.firstOrNull?.rawValue;
     if (code == null || code.isEmpty) return;
@@ -75,7 +139,8 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
     setState(() => _processing = true);
     await _controller.stop();
 
-    final product = await DatabaseService.getProductByBarcode(code);
+    // Smart lookup: barcode → IMEI → serial number
+    final product = await DatabaseService.findProductByAnyCode(code);
 
     if (!mounted) return;
 
@@ -88,38 +153,72 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
       return;
     }
 
-    if (_mode == 'in') {
-      // Stock In: go directly to stock-in view
-      setState(() {
-        _lastScanned = product;
-        _lastQty = 1;
-        _step = _Step.cartReview; // reuse cartReview for stock-in confirmation
-        _processing = false;
-      });
+    final existingIdx = _cart.indexWhere((c) => c.product.id == product.id);
+    if (existingIdx >= 0) {
+      _cart[existingIdx].qty++;
     } else {
-      // Stock Out: check if already in cart
-      final existingIdx = _cart.indexWhere((c) => c.product.id == product.id);
-      if (existingIdx >= 0) {
-        _cart[existingIdx].qty++;
-        setState(() {
-          _lastScanned = product;
-          _lastQty = _cart[existingIdx].qty;
-          _step = _Step.cartReview;
-          _processing = false;
-        });
-      } else {
-        _cart.add(CartItem(product: product, qty: 1));
-        setState(() {
-          _lastScanned = product;
-          _lastQty = 1;
-          _step = _Step.cartReview;
-          _processing = false;
-        });
-      }
+      _cart.add(CartItem(product: product, qty: 1));
+    }
+    setState(() {
+      _lastScanned = product;
+      _step = _Step.cartReview;
+      _processing = false;
+    });
+  }
+
+  // ── Stock IN: multi-scan — keep camera open, collect codes ──────────────
+
+  Future<void> _onDetectStockIn(BarcodeCapture capture) async {
+    if (_step != _Step.camera || _processing) return;
+    final code = capture.barcodes.firstOrNull?.rawValue;
+    if (code == null || code.isEmpty) return;
+
+    // Skip if already scanned
+    if (_scannedCodes.any((s) => s.value == code)) return;
+
+    setState(() => _processing = true);
+
+    final type = classifyBarcode(code);
+    setState(() {
+      _scannedCodes.add(ScannedCode(value: code, type: type));
+      _processing = false;
+    });
+
+    // Brief haptic-like feedback via snackbar
+    if (mounted) {
+      ScaffoldMessenger.of(context).clearSnackBars();
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Scanned ${_scannedCodes.last.label}: $code'),
+        duration: const Duration(seconds: 1),
+        behavior: SnackBarBehavior.floating,
+      ));
     }
   }
 
-  // ── Build ─────────────────────────────────────────────────────────────────
+  void _finishMultiScan() async {
+    await _controller.stop();
+    if (_scannedCodes.isEmpty) {
+      _scanAnother();
+      return;
+    }
+
+    // Check if the product barcode (EAN) already exists
+    final eanCode = _scannedCodes.where((s) => s.type == BarcodeType.ean).firstOrNull;
+    if (eanCode != null) {
+      final existing = await DatabaseService.getProductByBarcode(eanCode.value);
+      if (existing != null && mounted) {
+        // Product exists — go to stock-in view
+        setState(() {
+          _lastScanned = existing;
+          _step = _Step.cartReview;
+        });
+        return;
+      }
+    }
+
+    // No existing product — go to add-product form with scanned data pre-filled
+    setState(() => _step = _Step.multiScanReview);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -156,16 +255,29 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
       case _Step.addProduct:
         return _AddProductView(
           barcode: _unknownBarcode ?? '',
+          scannedCodes: const [],
           onSaved: _mode == 'in' ? _resetAll : _scanAnother,
+          onCancel: _scanAnother,
+        );
+      case _Step.multiScanReview:
+        return _AddProductView(
+          barcode: '',
+          scannedCodes: _scannedCodes,
+          onSaved: _resetAll,
           onCancel: _scanAnother,
         );
     }
   }
 
   Widget _buildCamera() {
+    final isStockIn = _mode == 'in';
+
     return Stack(
       children: [
-        MobileScanner(controller: _controller, onDetect: _onDetect),
+        MobileScanner(
+          controller: _controller,
+          onDetect: isStockIn ? _onDetectStockIn : _onDetectStockOut,
+        ),
 
         // Mode toggle + torch
         Positioned(
@@ -186,13 +298,19 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
                       _ModeChip(
                         label: 'Stock OUT',
                         selected: _mode == 'out',
-                        onTap: () => setState(() => _mode = 'out'),
+                        onTap: () => setState(() {
+                          _mode = 'out';
+                          _scannedCodes.clear();
+                        }),
                       ),
                       const SizedBox(width: 6),
                       _ModeChip(
                         label: 'Stock IN',
                         selected: _mode == 'in',
-                        onTap: () => setState(() => _mode = 'in'),
+                        onTap: () => setState(() {
+                          _mode = 'in';
+                          _scannedCodes.clear();
+                        }),
                       ),
                     ],
                   ),
@@ -227,7 +345,7 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
         ),
 
         // Cart badge (Stock OUT)
-        if (_mode == 'out' && _cart.isNotEmpty)
+        if (!isStockIn && _cart.isNotEmpty)
           Positioned(
             top: 40,
             right: 72,
@@ -254,6 +372,77 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
             ),
           ),
 
+        // Stock IN: scanned codes list overlay
+        if (isStockIn && _scannedCodes.isNotEmpty)
+          Positioned(
+            bottom: 130,
+            left: 16,
+            right: 16,
+            child: Container(
+              constraints: const BoxConstraints(maxHeight: 180),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.8),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.checklist, color: Colors.white, size: 16),
+                        const SizedBox(width: 6),
+                        Text(
+                          '${_scannedCodes.length} code(s) scanned',
+                          style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Flexible(
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      itemCount: _scannedCodes.length,
+                      itemBuilder: (ctx, i) {
+                        final sc = _scannedCodes[i];
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 2),
+                          child: Row(
+                            children: [
+                              Icon(sc.icon, color: sc.color, size: 16),
+                              const SizedBox(width: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: sc.color.withOpacity(0.2),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(sc.label,
+                                    style: TextStyle(color: sc.color, fontSize: 10, fontWeight: FontWeight.bold)),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(sc.value,
+                                    style: const TextStyle(color: Colors.white70, fontSize: 11, fontFamily: 'monospace'),
+                                    overflow: TextOverflow.ellipsis),
+                              ),
+                              GestureDetector(
+                                onTap: () => setState(() => _scannedCodes.removeAt(i)),
+                                child: const Icon(Icons.close, color: Colors.white38, size: 16),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
         // Hint text
         Positioned(
           bottom: 80,
@@ -267,14 +456,32 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
                 borderRadius: BorderRadius.circular(20),
               ),
               child: Text(
-                _mode == 'out'
-                    ? 'Point at barcode to add to cart'
-                    : 'Point at barcode to add stock',
+                isStockIn
+                    ? 'Scan all barcodes on the box (IMEI, S/N, product code)'
+                    : 'Point at any barcode to find the product',
                 style: const TextStyle(color: Colors.white, fontSize: 13),
               ),
             ),
           ),
         ),
+
+        // Stock IN: Done button
+        if (isStockIn)
+          Positioned(
+            bottom: 20,
+            left: 40,
+            right: 40,
+            child: FilledButton.icon(
+              icon: const Icon(Icons.check),
+              label: Text(_scannedCodes.isEmpty
+                  ? 'Done Scanning'
+                  : 'Done — ${_scannedCodes.length} code(s)'),
+              onPressed: _finishMultiScan,
+              style: FilledButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+            ),
+          ),
 
         // Loading overlay
         if (_processing)
@@ -299,7 +506,7 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
   }
 }
 
-// ── Cart Review ───────────────────────────────────────────────────────────────
+// ── Cart Review (Stock OUT) ──────────────────────────────────────────────────
 
 class _CartReviewView extends StatelessWidget {
   final Product lastScanned;
@@ -325,7 +532,6 @@ class _CartReviewView extends StatelessWidget {
     return SafeArea(
       child: Column(
         children: [
-          // Header
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
             child: Row(
@@ -340,8 +546,14 @@ class _CartReviewView extends StatelessWidget {
                           style: theme.textTheme.titleMedium,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis),
-                      Text('${money.format(lastScanned.price)} each',
-                          style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                      Text(
+                        [
+                          money.format(lastScanned.price) + ' each',
+                          if (lastScanned.brand != null) lastScanned.brand!,
+                          if (lastScanned.model != null) lastScanned.model!,
+                        ].join(' · '),
+                        style: const TextStyle(color: Colors.grey, fontSize: 12),
+                      ),
                     ],
                   ),
                 ),
@@ -350,7 +562,6 @@ class _CartReviewView extends StatelessWidget {
           ),
           const Divider(),
 
-          // Cart list
           Expanded(
             child: ListView.builder(
               padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -374,7 +585,6 @@ class _CartReviewView extends StatelessWidget {
                             ],
                           ),
                         ),
-                        // Qty stepper
                         Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -385,17 +595,14 @@ class _CartReviewView extends StatelessWidget {
                                 size: 20,
                               ),
                               visualDensity: VisualDensity.compact,
-                              onPressed: () =>
-                                  onQtyChanged(item.product, item.qty - 1),
+                              onPressed: () => onQtyChanged(item.product, item.qty - 1),
                             ),
                             Text('${item.qty}',
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.bold, fontSize: 16)),
+                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                             IconButton(
                               icon: const Icon(Icons.add, size: 20),
                               visualDensity: VisualDensity.compact,
-                              onPressed: () =>
-                                  onQtyChanged(item.product, item.qty + 1),
+                              onPressed: () => onQtyChanged(item.product, item.qty + 1),
                             ),
                           ],
                         ),
@@ -415,7 +622,6 @@ class _CartReviewView extends StatelessWidget {
             ),
           ),
 
-          // Total + action buttons
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -470,7 +676,7 @@ class _CartReviewView extends StatelessWidget {
   }
 }
 
-// ── Stock In ──────────────────────────────────────────────────────────────────
+// ── Stock In ─────────────────────────────────────────────────────────────────
 
 class _StockInView extends StatefulWidget {
   final Product product;
@@ -554,8 +760,14 @@ class _StockInViewState extends State<_StockInView> {
                         children: [
                           Text(widget.product.name,
                               style: theme.textTheme.titleMedium),
-                          Text('Current stock: ${widget.product.stock}',
-                              style: const TextStyle(color: Colors.grey)),
+                          Text(
+                            [
+                              'Current stock: ${widget.product.stock}',
+                              if (widget.product.brand != null) widget.product.brand!,
+                              if (widget.product.model != null) widget.product.model!,
+                            ].join(' · '),
+                            style: const TextStyle(color: Colors.grey),
+                          ),
                         ],
                       ),
                     ),
@@ -608,15 +820,17 @@ class _StockInViewState extends State<_StockInView> {
   }
 }
 
-// ── Add Product (unknown barcode) ─────────────────────────────────────────────
+// ── Add Product (with smart multi-scan support) ──────────────────────────────
 
 class _AddProductView extends StatefulWidget {
   final String barcode;
+  final List<ScannedCode> scannedCodes;
   final VoidCallback onSaved;
   final VoidCallback onCancel;
 
   const _AddProductView({
     required this.barcode,
+    required this.scannedCodes,
     required this.onSaved,
     required this.onCancel,
   });
@@ -626,16 +840,61 @@ class _AddProductView extends StatefulWidget {
 }
 
 class _AddProductViewState extends State<_AddProductView> {
-  final _formKey  = GlobalKey<FormState>();
-  final _name     = TextEditingController();
-  final _price    = TextEditingController();
-  final _stock    = TextEditingController(text: '1');
-  final _category = TextEditingController();
-  bool _saving    = false;
+  final _formKey    = GlobalKey<FormState>();
+  final _name       = TextEditingController();
+  final _brand      = TextEditingController();
+  final _model      = TextEditingController();
+  final _imei       = TextEditingController();
+  final _serial     = TextEditingController();
+  final _barcode    = TextEditingController();
+  final _price      = TextEditingController();
+  final _costPrice  = TextEditingController();
+  final _stock      = TextEditingController(text: '1');
+  final _category   = TextEditingController();
+  bool _saving      = false;
+
+  @override
+  void initState() {
+    super.initState();
+
+    if (widget.scannedCodes.isNotEmpty) {
+      // Pre-fill from multi-scan results
+      for (final sc in widget.scannedCodes) {
+        switch (sc.type) {
+          case BarcodeType.imei:
+            if (_imei.text.isEmpty) _imei.text = sc.value;
+            break;
+          case BarcodeType.ean:
+            if (_barcode.text.isEmpty) _barcode.text = sc.value;
+            break;
+          case BarcodeType.serial:
+            if (_serial.text.isEmpty) _serial.text = sc.value;
+            break;
+        }
+      }
+    } else if (widget.barcode.isNotEmpty) {
+      // Single unknown barcode — classify and fill the right field
+      final type = classifyBarcode(widget.barcode);
+      switch (type) {
+        case BarcodeType.imei:
+          _imei.text = widget.barcode;
+          break;
+        case BarcodeType.ean:
+          _barcode.text = widget.barcode;
+          break;
+        case BarcodeType.serial:
+          _serial.text = widget.barcode;
+          break;
+      }
+    }
+  }
 
   @override
   void dispose() {
-    _name.dispose(); _price.dispose(); _stock.dispose(); _category.dispose();
+    _name.dispose(); _brand.dispose(); _model.dispose();
+    _imei.dispose(); _serial.dispose(); _barcode.dispose();
+    _price.dispose(); _costPrice.dispose(); _stock.dispose();
+    _category.dispose();
     super.dispose();
   }
 
@@ -646,8 +905,13 @@ class _AddProductViewState extends State<_AddProductView> {
       await DatabaseService.addProduct(Product(
         id: 0,
         name: _name.text.trim(),
-        barcode: widget.barcode,
+        barcode: _barcode.text.trim().isEmpty ? null : _barcode.text.trim(),
+        brand: _brand.text.trim().isEmpty ? null : _brand.text.trim(),
+        model: _model.text.trim().isEmpty ? null : _model.text.trim(),
+        imei: _imei.text.trim().isEmpty ? null : _imei.text.trim(),
+        serialNumber: _serial.text.trim().isEmpty ? null : _serial.text.trim(),
         price: double.parse(_price.text),
+        costPrice: double.tryParse(_costPrice.text) ?? 0,
         stock: int.parse(_stock.text),
         category: _category.text.trim().isEmpty ? null : _category.text.trim(),
       ));
@@ -668,6 +932,8 @@ class _AddProductViewState extends State<_AddProductView> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final hasMultiScan = widget.scannedCodes.isNotEmpty;
+
     return Scaffold(
       body: SafeArea(
         child: SingleChildScrollView(
@@ -678,43 +944,161 @@ class _AddProductViewState extends State<_AddProductView> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(children: [
-                  const Icon(Icons.search_off, size: 32, color: Colors.orange),
+                  Icon(hasMultiScan ? Icons.phone_android : Icons.search_off,
+                      size: 32, color: hasMultiScan ? Colors.blue : Colors.orange),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text('New Product', style: theme.textTheme.titleLarge),
-                        Text('Barcode: ${widget.barcode}',
-                            style: const TextStyle(
-                                fontFamily: 'monospace',
-                                fontSize: 12,
-                                color: Colors.grey)),
+                        if (hasMultiScan)
+                          Text('${widget.scannedCodes.length} barcode(s) scanned from box',
+                              style: const TextStyle(fontSize: 12, color: Colors.grey))
+                        else if (widget.barcode.isNotEmpty)
+                          Text('Barcode: ${widget.barcode}',
+                              style: const TextStyle(
+                                  fontFamily: 'monospace', fontSize: 12, color: Colors.grey)),
                       ],
                     ),
                   ),
                 ]),
+
+                // Show scanned codes summary
+                if (hasMultiScan) ...[
+                  const SizedBox(height: 12),
+                  Card(
+                    color: Colors.blue.shade50,
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Scanned Codes (auto-classified)',
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                          const SizedBox(height: 8),
+                          ...widget.scannedCodes.map((sc) => Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 2),
+                                child: Row(
+                                  children: [
+                                    Icon(sc.icon, size: 16, color: sc.color),
+                                    const SizedBox(width: 6),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: sc.color.withOpacity(0.15),
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: Text(sc.label,
+                                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: sc.color)),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(sc.value,
+                                          style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                                          overflow: TextOverflow.ellipsis),
+                                    ),
+                                  ],
+                                ),
+                              )),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+
                 const SizedBox(height: 6),
                 const Text(
-                    'This barcode is not in your inventory yet. '
-                    'Fill in the details to add it.',
+                    'Fill in the product details. Scanned codes are pre-filled below.',
                     style: TextStyle(color: Colors.grey, fontSize: 13)),
                 const Divider(height: 24),
+
+                // Product name
                 TextFormField(
                   controller: _name,
-                  decoration: const InputDecoration(labelText: 'Product Name *'),
+                  decoration: const InputDecoration(
+                    labelText: 'Product Name *',
+                    hintText: 'e.g. Samsung Galaxy A15',
+                  ),
                   textCapitalization: TextCapitalization.words,
-                  validator: (v) =>
-                      v == null || v.trim().isEmpty ? 'Required' : null,
+                  validator: (v) => v == null || v.trim().isEmpty ? 'Required' : null,
                 ),
                 const SizedBox(height: 12),
+
+                // Brand + Model
+                Row(children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: _brand,
+                      decoration: const InputDecoration(
+                        labelText: 'Brand',
+                        hintText: 'e.g. Samsung',
+                      ),
+                      textCapitalization: TextCapitalization.words,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextFormField(
+                      controller: _model,
+                      decoration: const InputDecoration(
+                        labelText: 'Model',
+                        hintText: 'e.g. Galaxy A15',
+                      ),
+                      textCapitalization: TextCapitalization.words,
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: 12),
+
+                // IMEI
+                TextFormField(
+                  controller: _imei,
+                  decoration: InputDecoration(
+                    labelText: 'IMEI',
+                    prefixIcon: const Icon(Icons.phone_android, size: 20),
+                    hintText: '15-digit IMEI number',
+                    suffixIcon: _imei.text.isNotEmpty
+                        ? const Icon(Icons.check_circle, color: Colors.green, size: 18)
+                        : null,
+                  ),
+                  keyboardType: TextInputType.number,
+                ),
+                const SizedBox(height: 12),
+
+                // Serial number
+                TextFormField(
+                  controller: _serial,
+                  decoration: InputDecoration(
+                    labelText: 'Serial Number (S/N)',
+                    prefixIcon: const Icon(Icons.tag, size: 20),
+                    suffixIcon: _serial.text.isNotEmpty
+                        ? const Icon(Icons.check_circle, color: Colors.green, size: 18)
+                        : null,
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                // Product barcode (EAN)
+                TextFormField(
+                  controller: _barcode,
+                  decoration: InputDecoration(
+                    labelText: 'Product Barcode (EAN/UPC)',
+                    prefixIcon: const Icon(Icons.qr_code, size: 20),
+                    suffixIcon: _barcode.text.isNotEmpty
+                        ? const Icon(Icons.check_circle, color: Colors.green, size: 18)
+                        : null,
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                // Price + Cost
                 Row(children: [
                   Expanded(
                     child: TextFormField(
                       controller: _price,
-                      decoration: const InputDecoration(labelText: 'Price *'),
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(labelText: 'Sell Price *'),
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
                       validator: (v) {
                         if (v == null || v.isEmpty) return 'Required';
                         if (double.tryParse(v) == null) return 'Invalid';
@@ -725,21 +1109,37 @@ class _AddProductViewState extends State<_AddProductView> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: TextFormField(
-                      controller: _stock,
-                      decoration: const InputDecoration(labelText: 'Stock Qty'),
-                      keyboardType: TextInputType.number,
-                      validator: (v) =>
-                          int.tryParse(v ?? '') == null ? 'Invalid' : null,
+                      controller: _costPrice,
+                      decoration: const InputDecoration(labelText: 'Cost Price'),
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
                     ),
                   ),
                 ]),
                 const SizedBox(height: 12),
-                TextFormField(
-                  controller: _category,
-                  decoration:
-                      const InputDecoration(labelText: 'Category (optional)'),
-                  textCapitalization: TextCapitalization.words,
-                ),
+
+                // Stock + Category
+                Row(children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: _stock,
+                      decoration: const InputDecoration(labelText: 'Stock Qty'),
+                      keyboardType: TextInputType.number,
+                      validator: (v) => int.tryParse(v ?? '') == null ? 'Invalid' : null,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextFormField(
+                      controller: _category,
+                      decoration: const InputDecoration(
+                        labelText: 'Category',
+                        hintText: 'e.g. Smartphones',
+                      ),
+                      textCapitalization: TextCapitalization.words,
+                    ),
+                  ),
+                ]),
+
                 const SizedBox(height: 24),
                 Row(children: [
                   Expanded(
@@ -769,7 +1169,7 @@ class _AddProductViewState extends State<_AddProductView> {
   }
 }
 
-// ── Scanner overlay ───────────────────────────────────────────────────────────
+// ── Scanner overlay ──────────────────────────────────────────────────────────
 
 class _FramePainter extends CustomPainter {
   @override

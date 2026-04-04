@@ -39,6 +39,38 @@ class DatabaseService {
     return Product.fromJson(res);
   }
 
+  /// Search by barcode, IMEI, or serial number — returns the first match.
+  static Future<Product?> findProductByAnyCode(String code) async {
+    // Try barcode first
+    var res = await _db
+        .from('products')
+        .select()
+        .eq('store_id', _storeId)
+        .eq('barcode', code)
+        .maybeSingle();
+    if (res != null) return Product.fromJson(res);
+
+    // Try IMEI
+    res = await _db
+        .from('products')
+        .select()
+        .eq('store_id', _storeId)
+        .eq('imei', code)
+        .maybeSingle();
+    if (res != null) return Product.fromJson(res);
+
+    // Try serial number
+    res = await _db
+        .from('products')
+        .select()
+        .eq('store_id', _storeId)
+        .eq('serial_number', code)
+        .maybeSingle();
+    if (res != null) return Product.fromJson(res);
+
+    return null;
+  }
+
   static Future<void> addProduct(Product p) async {
     await _db.from('products').insert({
       'store_id': _storeId,
@@ -414,8 +446,10 @@ class DatabaseService {
       'exported_at': DateTime.now().toIso8601String(),
       'version': 2,
       'products': products.map((p) => {
-        'name': p.name, 'barcode': p.barcode, 'price': p.price,
-        'cost_price': p.costPrice,
+        'name': p.name, 'barcode': p.barcode,
+        'brand': p.brand, 'model': p.model,
+        'imei': p.imei, 'serial_number': p.serialNumber,
+        'price': p.price, 'cost_price': p.costPrice,
         'stock': p.stock, 'category': p.category,
         'created_at': p.createdAt?.toIso8601String(),
       }).toList(),
@@ -444,6 +478,8 @@ class DatabaseService {
       await _db.from('products').insert({
         'store_id': _storeId,
         'name': row['name'], 'barcode': row['barcode'],
+        'brand': row['brand'], 'model': row['model'],
+        'imei': row['imei'], 'serial_number': row['serial_number'],
         'price': row['price'], 'stock': row['stock'],
         'cost_price': row['cost_price'] ?? 0,
         'category': row['category'],

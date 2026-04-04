@@ -2,6 +2,10 @@ class Product {
   final int id;
   final String name;
   final String? barcode;
+  final String? brand;
+  final String? model;
+  final String? imei;
+  final String? serialNumber;
   final double price;
   final double costPrice;
   final int stock;
@@ -14,6 +18,10 @@ class Product {
     required this.id,
     required this.name,
     this.barcode,
+    this.brand,
+    this.model,
+    this.imei,
+    this.serialNumber,
     required this.price,
     this.costPrice = 0,
     required this.stock,
@@ -27,6 +35,10 @@ class Product {
         id: j['id'] as int,
         name: j['name'] as String,
         barcode: j['barcode'] as String?,
+        brand: j['brand'] as String?,
+        model: j['model'] as String?,
+        imei: j['imei'] as String?,
+        serialNumber: j['serial_number'] as String?,
         price: (j['price'] as num).toDouble(),
         costPrice: (j['cost_price'] as num?)?.toDouble() ?? 0,
         stock: (j['stock'] as num).toInt(),
@@ -41,6 +53,10 @@ class Product {
   Map<String, dynamic> toInsert() => {
         'name': name,
         'barcode': barcode,
+        'brand': brand,
+        'model': model,
+        'imei': imei,
+        'serial_number': serialNumber,
         'price': price,
         'cost_price': costPrice,
         'stock': stock,
@@ -52,6 +68,10 @@ class Product {
   Product copyWith({
     String? name,
     String? barcode,
+    String? brand,
+    String? model,
+    String? imei,
+    String? serialNumber,
     double? price,
     double? costPrice,
     int? stock,
@@ -63,6 +83,10 @@ class Product {
         id: id,
         name: name ?? this.name,
         barcode: barcode ?? this.barcode,
+        brand: brand ?? this.brand,
+        model: model ?? this.model,
+        imei: imei ?? this.imei,
+        serialNumber: serialNumber ?? this.serialNumber,
         price: price ?? this.price,
         costPrice: costPrice ?? this.costPrice,
         stock: stock ?? this.stock,
