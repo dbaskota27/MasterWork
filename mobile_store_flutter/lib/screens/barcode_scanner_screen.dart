@@ -858,6 +858,7 @@ class _AddProductViewState extends State<_AddProductView> {
   late final TextEditingController _price;
   late final TextEditingController _costPrice;
   late final TextEditingController _stock;
+  late final TextEditingController _lowStockThreshold;
   late final TextEditingController _category;
   bool _saving = false;
 
@@ -909,6 +910,7 @@ class _AddProductViewState extends State<_AddProductView> {
     _price     = TextEditingController();
     _costPrice = TextEditingController();
     _stock     = TextEditingController(text: '1');
+    _lowStockThreshold = TextEditingController(text: '5');
     _category  = TextEditingController();
   }
 
@@ -917,7 +919,7 @@ class _AddProductViewState extends State<_AddProductView> {
     _name.dispose(); _brand.dispose(); _model.dispose();
     _imei.dispose(); _serial.dispose(); _barcode.dispose();
     _price.dispose(); _costPrice.dispose(); _stock.dispose();
-    _category.dispose();
+    _lowStockThreshold.dispose(); _category.dispose();
     super.dispose();
   }
 
@@ -936,6 +938,7 @@ class _AddProductViewState extends State<_AddProductView> {
         price: double.parse(_price.text),
         costPrice: double.tryParse(_costPrice.text) ?? 0,
         stock: int.parse(_stock.text),
+        lowStockThreshold: int.tryParse(_lowStockThreshold.text) ?? 5,
         category: _category.text.trim().isEmpty ? null : _category.text.trim(),
       ));
       if (mounted) {
@@ -1039,83 +1042,13 @@ class _AddProductViewState extends State<_AddProductView> {
                 // Product name
                 TextFormField(
                   controller: _name,
-                  decoration: const InputDecoration(
-                    labelText: 'Product Name *',
-                    hintText: 'e.g. Samsung Galaxy A15',
-                  ),
+                  decoration: const InputDecoration(labelText: 'Product Name *'),
                   textCapitalization: TextCapitalization.words,
                   validator: (v) => v == null || v.trim().isEmpty ? 'Required' : null,
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
 
-                // Brand + Model
-                Row(children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _brand,
-                      decoration: const InputDecoration(
-                        labelText: 'Brand',
-                        hintText: 'e.g. Samsung',
-                      ),
-                      textCapitalization: TextCapitalization.words,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextFormField(
-                      controller: _model,
-                      decoration: const InputDecoration(
-                        labelText: 'Model',
-                        hintText: 'e.g. Galaxy A15',
-                      ),
-                      textCapitalization: TextCapitalization.words,
-                    ),
-                  ),
-                ]),
-                const SizedBox(height: 12),
-
-                // IMEI
-                TextFormField(
-                  controller: _imei,
-                  decoration: InputDecoration(
-                    labelText: 'IMEI',
-                    prefixIcon: const Icon(Icons.phone_android, size: 20),
-                    hintText: '15-digit IMEI number',
-                    suffixIcon: _imei.text.isNotEmpty
-                        ? const Icon(Icons.check_circle, color: Colors.green, size: 18)
-                        : null,
-                  ),
-                  keyboardType: TextInputType.number,
-                ),
-                const SizedBox(height: 12),
-
-                // Serial number
-                TextFormField(
-                  controller: _serial,
-                  decoration: InputDecoration(
-                    labelText: 'Serial Number (S/N)',
-                    prefixIcon: const Icon(Icons.tag, size: 20),
-                    suffixIcon: _serial.text.isNotEmpty
-                        ? const Icon(Icons.check_circle, color: Colors.green, size: 18)
-                        : null,
-                  ),
-                ),
-                const SizedBox(height: 12),
-
-                // Product barcode (EAN)
-                TextFormField(
-                  controller: _barcode,
-                  decoration: InputDecoration(
-                    labelText: 'Product Barcode (EAN/UPC)',
-                    prefixIcon: const Icon(Icons.qr_code, size: 20),
-                    suffixIcon: _barcode.text.isNotEmpty
-                        ? const Icon(Icons.check_circle, color: Colors.green, size: 18)
-                        : null,
-                  ),
-                ),
-                const SizedBox(height: 12),
-
-                // Price + Cost
+                // Sell Price + Cost Price
                 Row(children: [
                   Expanded(
                     child: TextFormField(
@@ -1129,7 +1062,7 @@ class _AddProductViewState extends State<_AddProductView> {
                       },
                     ),
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 10),
                   Expanded(
                     child: TextFormField(
                       controller: _costPrice,
@@ -1138,30 +1071,92 @@ class _AddProductViewState extends State<_AddProductView> {
                     ),
                   ),
                 ]),
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
 
-                // Stock + Category
+                // Stock + Low Stock Alert
                 Row(children: [
                   Expanded(
                     child: TextFormField(
                       controller: _stock,
-                      decoration: const InputDecoration(labelText: 'Stock Qty'),
+                      decoration: const InputDecoration(labelText: 'Stock'),
                       keyboardType: TextInputType.number,
                       validator: (v) => int.tryParse(v ?? '') == null ? 'Invalid' : null,
                     ),
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 10),
                   Expanded(
                     child: TextFormField(
-                      controller: _category,
-                      decoration: const InputDecoration(
-                        labelText: 'Category',
-                        hintText: 'e.g. Smartphones',
-                      ),
+                      controller: _lowStockThreshold,
+                      decoration: const InputDecoration(labelText: 'Low Stock Alert'),
+                      keyboardType: TextInputType.number,
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: 10),
+
+                // Brand + Model
+                Row(children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: _brand,
+                      decoration: const InputDecoration(labelText: 'Brand'),
+                      textCapitalization: TextCapitalization.words,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextFormField(
+                      controller: _model,
+                      decoration: const InputDecoration(labelText: 'Model'),
                       textCapitalization: TextCapitalization.words,
                     ),
                   ),
                 ]),
+                const SizedBox(height: 10),
+
+                // IMEI
+                TextFormField(
+                  controller: _imei,
+                  decoration: InputDecoration(
+                    labelText: 'IMEI',
+                    suffixIcon: _imei.text.isNotEmpty
+                        ? const Icon(Icons.check_circle, color: Colors.green, size: 18)
+                        : null,
+                  ),
+                  keyboardType: TextInputType.number,
+                ),
+                const SizedBox(height: 10),
+
+                // Serial number
+                TextFormField(
+                  controller: _serial,
+                  decoration: InputDecoration(
+                    labelText: 'Serial Number (S/N)',
+                    suffixIcon: _serial.text.isNotEmpty
+                        ? const Icon(Icons.check_circle, color: Colors.green, size: 18)
+                        : null,
+                  ),
+                ),
+                const SizedBox(height: 10),
+
+                // Product barcode (EAN)
+                TextFormField(
+                  controller: _barcode,
+                  decoration: InputDecoration(
+                    labelText: 'Product Barcode (EAN/UPC)',
+                    suffixIcon: _barcode.text.isNotEmpty
+                        ? const Icon(Icons.check_circle, color: Colors.green, size: 18)
+                        : null,
+                  ),
+                ),
+                const SizedBox(height: 10),
+
+                // Category
+                TextFormField(
+                  controller: _category,
+                  decoration: const InputDecoration(labelText: 'Category'),
+                  textCapitalization: TextCapitalization.words,
+                ),
 
                 const SizedBox(height: 24),
                 Row(children: [
