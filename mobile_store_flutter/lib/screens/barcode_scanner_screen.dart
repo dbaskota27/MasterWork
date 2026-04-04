@@ -170,25 +170,31 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
 
   Future<void> _onDetectStockIn(BarcodeCapture capture) async {
     if (_step != _Step.camera || _processing) return;
-    final code = capture.barcodes.firstOrNull?.rawValue;
-    if (code == null || code.isEmpty) return;
 
-    // Skip if already scanned
-    if (_scannedCodes.any((s) => s.value == code)) return;
+    // Grab ALL barcodes visible in this frame
+    int added = 0;
+    for (final barcode in capture.barcodes) {
+      final code = barcode.rawValue;
+      if (code == null || code.isEmpty) continue;
 
-    setState(() => _processing = true);
+      // Skip duplicates
+      if (_scannedCodes.any((s) => s.value == code)) continue;
 
-    final type = classifyBarcode(code);
-    setState(() {
+      final type = classifyBarcode(code);
       _scannedCodes.add(ScannedCode(value: code, type: type));
-      _processing = false;
-    });
+      added++;
+    }
 
-    // Brief haptic-like feedback via snackbar
+    if (added == 0) return;
+
+    setState(() {});
+
     if (mounted) {
       ScaffoldMessenger.of(context).clearSnackBars();
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Scanned ${_scannedCodes.last.label}: $code'),
+        content: Text(added == 1
+            ? 'Scanned ${_scannedCodes.last.label}: ${_scannedCodes.last.value}'
+            : 'Scanned $added barcodes at once'),
         duration: const Duration(seconds: 1),
         behavior: SnackBarBehavior.floating,
       ));

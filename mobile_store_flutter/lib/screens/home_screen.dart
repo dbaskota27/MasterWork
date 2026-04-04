@@ -20,6 +20,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _selectedIndex = 0;
+  bool _showMoreGrid = false;
   static const int _maxBottomItems = 6;
 
   late final List<_NavItem> _allItems = [
@@ -84,7 +85,10 @@ class _HomeScreenState extends State<HomeScreen> {
           final globalIndex = _allItems.indexOf(item);
           final isSelected = _selectedIndex == globalIndex;
           return GestureDetector(
-            onTap: () => setState(() => _selectedIndex = globalIndex),
+            onTap: () => setState(() {
+              _selectedIndex = globalIndex;
+              _showMoreGrid = false;
+            }),
             child: Container(
               decoration: BoxDecoration(
                 color: isSelected
@@ -120,8 +124,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final showMoreScreen = _needsMoreTab && _selectedIndex >= _maxBottomItems;
-
     return Scaffold(
       appBar: AppBar(
         title: Text(_currentTitle),
@@ -160,22 +162,17 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      body: showMoreScreen ? _buildMoreGrid() : _currentScreen,
+      body: _showMoreGrid ? _buildMoreGrid() : _currentScreen,
       bottomNavigationBar: NavigationBar(
         selectedIndex: _effectiveIndex,
         onDestinationSelected: (i) {
           if (_needsMoreTab && i == _maxBottomItems) {
-            // Tapped "More" — show the grid but keep _selectedIndex
-            // so we can highlight the active overflow item
-            setState(() {
-              // If already viewing an overflow item, stay there;
-              // otherwise jump to the first overflow item index to show grid
-              if (_selectedIndex < _maxBottomItems) {
-                _selectedIndex = _maxBottomItems;
-              }
-            });
+            setState(() => _showMoreGrid = true);
           } else {
-            setState(() => _selectedIndex = i);
+            setState(() {
+              _selectedIndex = i;
+              _showMoreGrid = false;
+            });
           }
         },
         destinations: [
