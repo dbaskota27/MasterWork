@@ -130,55 +130,15 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
     await _controller.start();
   }
 
-  // ── Stock OUT: detect & look up ─────────────────────────────────────────
+  // ── Universal barcode detection — camera stays open, collects all codes ──
 
-  Future<void> _onDetectStockOut(BarcodeCapture capture) async {
-    if (_step != _Step.camera || _processing) return;
-    final code = capture.barcodes.firstOrNull?.rawValue;
-    if (code == null || code.isEmpty) return;
-
-    setState(() => _processing = true);
-    await _controller.stop();
-
-    // Smart lookup: barcode → IMEI → serial number
-    final product = await DatabaseService.findProductByAnyCode(code);
-
-    if (!mounted) return;
-
-    if (product == null) {
-      setState(() {
-        _unknownBarcode = code;
-        _step = _Step.addProduct;
-        _processing = false;
-      });
-      return;
-    }
-
-    final existingIdx = _cart.indexWhere((c) => c.product.id == product.id);
-    if (existingIdx >= 0) {
-      _cart[existingIdx].qty++;
-    } else {
-      _cart.add(CartItem(product: product, qty: 1));
-    }
-    setState(() {
-      _lastScanned = product;
-      _step = _Step.cartReview;
-      _processing = false;
-    });
-  }
-
-  // ── Stock IN: multi-scan — keep camera open, collect codes ──────────────
-
-  Future<void> _onDetectStockIn(BarcodeCapture capture) async {
+  Future<void> _onDetect(BarcodeCapture capture) async {
     if (_step != _Step.camera || _processing) return;
 
-    // Grab ALL barcodes visible in this frame
     int added = 0;
     for (final barcode in capture.barcodes) {
       final code = barcode.rawValue;
       if (code == null || code.isEmpty) continue;
-
-      // Skip duplicates
       if (_scannedCodes.any((s) => s.value == code)) continue;
 
       final type = classifyBarcode(code);
@@ -200,32 +160,56 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
         behavior: SnackBarBehavior.floating,
       ));
     }
-
   }
 
-  void _finishMultiScan() async {
+  // ── User taps "Done Scanning" ───────────────────────────────────────────
+
+  void _finishScanning() async {
     await _controller.stop();
     if (_scannedCodes.isEmpty) {
       _scanAnother();
       return;
     }
 
-    // Check if the product barcode (EAN) already exists
-    final eanCode = _scannedCodes.where((s) => s.type == BarcodeType.ean).firstOrNull;
-    if (eanCode != null) {
-      final existing = await DatabaseService.getProductByBarcode(eanCode.value);
-      if (existing != null && mounted) {
-        // Product exists — go to stock-in view
-        setState(() {
-          _lastScanned = existing;
-          _step = _Step.cartReview;
-        });
-        return;
-      }
+    setState(() => _processing = true);
+
+    // Try to find the product by any of the scanned codes
+    Product? found;
+    for (final sc in _scannedCodes) {
+      found = await DatabaseService.findProductByAnyCode(sc.value);
+      if (found != null) break;
     }
 
-    // No existing product — go to add-product form with scanned data pre-filled
-    setState(() => _step = _Step.multiScanReview);
+    if (!mounted) return;
+
+    if (found != null) {
+      // Product exists
+      if (_mode == 'in') {
+        setState(() {
+          _lastScanned = found;
+          _step = _Step.cartReview;
+          _processing = false;
+        });
+      } else {
+        final existingIdx = _cart.indexWhere((c) => c.product.id == found!.id);
+        if (existingIdx >= 0) {
+          _cart[existingIdx].qty++;
+        } else {
+          _cart.add(CartItem(product: found, qty: 1));
+        }
+        setState(() {
+          _lastScanned = found;
+          _step = _Step.cartReview;
+          _processing = false;
+        });
+      }
+    } else {
+      // Not found — go to add product form with all scanned codes pre-filled
+      setState(() {
+        _step = _Step.multiScanReview;
+        _processing = false;
+      });
+    }
   }
 
   @override
@@ -262,9 +246,9 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
         );
       case _Step.addProduct:
         return _AddProductView(
-          barcode: _unknownBarcode ?? '',
+          barcode: '',
           scannedCodes: const [],
-          onSaved: _mode == 'in' ? _resetAll : _scanAnother,
+          onSaved: _resetAll,
           onCancel: _scanAnother,
         );
       case _Step.multiScanReview:
@@ -278,13 +262,11 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
   }
 
   Widget _buildCamera() {
-    final isStockIn = _mode == 'in';
-
     return Stack(
       children: [
         MobileScanner(
           controller: _controller,
-          onDetect: isStockIn ? _onDetectStockIn : _onDetectStockOut,
+          onDetect: _onDetect,
         ),
 
         // Mode toggle + torch
@@ -352,8 +334,8 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
           child: IgnorePointer(child: CustomPaint(painter: _FramePainter())),
         ),
 
-        // Cart badge (Stock OUT)
-        if (!isStockIn && _cart.isNotEmpty)
+        // Cart badge (Stock OUT — only when items already in cart)
+        if (_mode == 'out' && _cart.isNotEmpty)
           Positioned(
             top: 40,
             right: 72,
@@ -380,8 +362,8 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
             ),
           ),
 
-        // Stock IN: scanned codes list overlay
-        if (isStockIn && _scannedCodes.isNotEmpty)
+        // Scanned codes list overlay
+        if (_scannedCodes.isNotEmpty)
           Positioned(
             bottom: 130,
             left: 16,
@@ -464,27 +446,26 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
                 borderRadius: BorderRadius.circular(20),
               ),
               child: Text(
-                isStockIn
+                _scannedCodes.isEmpty
                     ? 'Scan all barcodes on the box (IMEI, S/N, product code)'
-                    : 'Point at any barcode to find the product',
+                    : 'Keep scanning or tap Done when finished',
                 style: const TextStyle(color: Colors.white, fontSize: 13),
               ),
             ),
           ),
         ),
 
-        // Stock IN: Done button
-        if (isStockIn)
-          Positioned(
-            bottom: 20,
-            left: 40,
-            right: 40,
-            child: FilledButton.icon(
-              icon: const Icon(Icons.check),
-              label: Text(_scannedCodes.isEmpty
-                  ? 'Done Scanning'
-                  : 'Done — ${_scannedCodes.length} code(s)'),
-              onPressed: _finishMultiScan,
+        // Done button — always visible
+        Positioned(
+          bottom: 20,
+          left: 40,
+          right: 40,
+          child: FilledButton.icon(
+            icon: const Icon(Icons.check),
+            label: Text(_scannedCodes.isEmpty
+                ? 'Done Scanning'
+                : 'Done — ${_scannedCodes.length} code(s)'),
+            onPressed: _finishScanning,
               style: FilledButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 14),
               ),
